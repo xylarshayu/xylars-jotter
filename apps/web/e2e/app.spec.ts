@@ -154,11 +154,17 @@ test("jumps from a search result to the notes around it; hides a channel on this
   await page.reload()
   await expect(page.getByRole("link", { name: "Synthetic log" })).toHaveCount(0)
   await page.getByRole("button", { name: "Show 1 hidden channel" }).click()
-  await page.getByRole("link", { name: "Synthetic log" }).click()
+  // Shown again, its notes return to All notes too, each with a link to the channel.
+  await page
+    .getByRole("navigation", { name: "Channels" })
+    .getByRole("link", { name: "Synthetic log" })
+    .click()
   await expect(feed(page).getByText(n(149))).toBeVisible()
   await page.getByRole("button", { name: "Channel options" }).click()
   await page.getByRole("button", { name: "Unhide" }).click()
-  await expect(page.getByRole("link", { name: "Synthetic log" })).toBeVisible()
+  await expect(
+    page.getByRole("navigation", { name: "Channels" }).getByRole("link", { name: "Synthetic log" }),
+  ).toBeVisible()
   await expect(page.getByRole("button", { name: /hidden channel/ })).toHaveCount(0)
 })
 

@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, openSync, readFileSync, rmSync } from "node:fs"
 import { createServer } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -23,8 +23,14 @@ async function server(): Promise<string> {
   const dir = mkdtempSync(join(tmpdir(), "jot-cli-test-"))
   dirs.push(dir)
   const script = join(import.meta.dirname, "..", "..", "worker", "scripts", "local-server.mjs")
+  // The server's output goes to a log, quoted if it fails to start (CI only shows the error).
+  const log = join(dir, "server.log")
+  const out = openSync(log, "w")
   children.push(
-    spawn(process.execPath, [script, String(port), dir], { stdio: "ignore", detached: true }),
+    spawn(process.execPath, [script, String(port), dir], {
+      stdio: ["ignore", out, out],
+      detached: true,
+    }),
   )
   const url = `http://127.0.0.1:${port}`
   const deadline = Date.now() + 90_000
@@ -35,7 +41,10 @@ async function server(): Promise<string> {
     } catch {
       /* not up yet */
     }
-    if (Date.now() > deadline) throw new Error("local worker did not start")
+    if (Date.now() > deadline) {
+      const tail = readFileSync(log, "utf8").split("\n").slice(-30).join("\n")
+      throw new Error(`local worker did not start on port ${port}:\n${tail}`)
+    }
     await new Promise((r) => setTimeout(r, 300))
   }
 }
