@@ -8,6 +8,8 @@ export interface Settings {
   enterSends: EnterMode
   idleMinutes: number
   hideGraceSeconds: number
+  /** Channel ids hidden from lists on this device (ADR-0021). Ids only, never names. */
+  hiddenChannels: string[]
 }
 
 export const DEFAULTS: Settings = {
@@ -15,6 +17,7 @@ export const DEFAULTS: Settings = {
   enterSends: "auto",
   idleMinutes: 5,
   hideGraceSeconds: 30,
+  hiddenChannels: [],
 }
 
 export const IDLE_CHOICES = [1, 5, 15, 30]
@@ -38,9 +41,12 @@ export function loadSettings(): Settings {
       hideGraceSeconds: HIDE_CHOICES.includes(raw.hideGraceSeconds!)
         ? raw.hideGraceSeconds!
         : DEFAULTS.hideGraceSeconds,
+      hiddenChannels: Array.isArray(raw.hiddenChannels)
+        ? raw.hiddenChannels.filter((id): id is string => typeof id === "string")
+        : [],
     }
   } catch {
-    return { ...DEFAULTS }
+    return { ...DEFAULTS, hiddenChannels: [] }
   }
 }
 

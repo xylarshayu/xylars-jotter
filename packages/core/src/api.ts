@@ -103,8 +103,10 @@ export class Api {
     return this.#json(Me, "/api/me")
   }
 
-  sync(since: number, limit = 500) {
-    return this.#json(SyncPage, `/api/sync?since=${since}&limit=${limit}`)
+  /** One page of changes after `since`. `count` asks for `remaining`, to show progress. */
+  sync(since: number, opts: { limit?: number; count?: boolean } = {}) {
+    const q = `since=${since}&limit=${opts.limit ?? 500}${opts.count ? "&count=1" : ""}`
+    return this.#json(SyncPage, `/api/sync?${q}`)
   }
 
   createChannel(req: CreateChannel) {

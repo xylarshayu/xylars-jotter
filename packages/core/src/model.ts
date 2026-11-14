@@ -68,6 +68,8 @@ export const SyncPage = z.object({
   notes: z.array(NoteRow),
   cursor: z.number().int().nonnegative(),
   more: z.boolean(),
+  /** Asked for with `count`: notes changed after `since`, this page included. */
+  remaining: z.number().int().nonnegative().optional(),
 })
 export type SyncPage = z.output<typeof SyncPage>
 

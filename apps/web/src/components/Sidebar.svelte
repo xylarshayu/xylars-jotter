@@ -3,8 +3,11 @@
   import Icon from "./Icon.svelte"
   import NewChannel from "./NewChannel.svelte"
 
-  const open = $derived(app.channels.filter((c) => c.lock === "open"))
-  const locked = $derived(app.channels.filter((c) => c.lock !== "open"))
+  const hiddenIds = $derived(new Set(app.settings.hiddenChannels))
+  const listed = $derived(app.channels.filter((c) => !hiddenIds.has(c.id)))
+  const open = $derived(listed.filter((c) => c.lock === "open"))
+  const locked = $derived(listed.filter((c) => c.lock !== "open"))
+  const hidden = $derived(app.hiddenChannels)
   const active = $derived(app.route.view === "feed" ? app.route.channel : null)
   const themeIcon = $derived(
     { system: "system", light: "sun", dark: "moon" }[app.settings.theme] ?? "system",
@@ -46,6 +49,35 @@
         <span class="count">{c.noteCount || ""}</span>
       </a>
     {/each}
+
+    {#if hidden.length && app.showHidden}
+      <div class="section">Hidden</div>
+      {#each hidden as c (c.id)}
+        <a
+          class="item"
+          class:locked={c.lock !== "open"}
+          class:active={active === c.id}
+          href="#/c/{c.id}"
+        >
+          <Icon name={c.lock === "open" ? "hash" : c.unlocked ? "unlock" : "lock"} size={18} />
+          <span class="label">{channelLabel(c)}</span>
+          <span class="count">{c.noteCount || ""}</span>
+        </a>
+      {/each}
+    {/if}
+    {#if hidden.length}
+      <button
+        class="item reveal"
+        aria-pressed={app.showHidden}
+        onclick={() => app.setShowHidden(!app.showHidden)}
+      >
+        <Icon name={app.showHidden ? "eye-off" : "eye"} size={18} />
+        <span class="label"
+          >{app.showHidden ? "Hide" : "Show"}
+          {hidden.length} hidden channel{hidden.length === 1 ? "" : "s"}</span
+        >
+      </button>
+    {/if}
 
     {#if creating}
       <NewChannel onclose={() => (creating = false)} />
@@ -163,9 +195,13 @@
     color: var(--faint);
     font-variant-numeric: tabular-nums;
   }
-  .add {
+  .add,
+  .reveal {
     color: var(--muted);
     margin-top: 8px;
+  }
+  .reveal {
+    font-size: 0.9rem;
   }
   .foot {
     display: flex;

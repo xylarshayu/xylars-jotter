@@ -180,14 +180,23 @@ function pageSql(cols: string, table: string, order: string, bytes: string): str
 api.get("/sync", async (c) => {
   const since = Math.max(0, Number(c.req.query("since") ?? 0) | 0)
   const limit = Math.min(1000, Math.max(1, Number(c.req.query("limit") ?? 500) | 0))
+  const count = c.req.query("count") === "1"
   const uid = c.get("userId")
-  // One batch = one consistent snapshot.
-  const [user, channels, notes] = await c.env.DB.batch([
+  // One batch = one consistent snapshot. `count` (a first sync's progress) reads only the index.
+  const [user, channels, notes, remaining] = await c.env.DB.batch([
     c.env.DB.prepare("SELECT seq FROM users WHERE id = ?").bind(uid),
     c.env.DB.prepare(
       `SELECT ${CHANNEL_COLS} FROM channels WHERE user_id = ? AND seq > ? ORDER BY seq`,
     ).bind(uid, since),
     c.env.DB.prepare(pageSql(NOTE_COLS, "notes", "seq", NOTE_BYTES)).bind(uid, since, limit + 1),
+    ...(count
+      ? [
+          c.env.DB.prepare("SELECT count(*) AS n FROM notes WHERE user_id = ? AND seq > ?").bind(
+            uid,
+            since,
+          ),
+        ]
+      : []),
   ])
   const head = (user!.results[0] as { seq: number } | undefined)?.seq ?? 0
   const noteRows = notes!.results as unknown as Paged<NoteDb>[]
@@ -201,6 +210,7 @@ api.get("/sync", async (c) => {
     notes: page.map(noteOut),
     cursor,
     more,
+    ...(remaining && { remaining: (remaining.results[0] as { n: number }).n }),
   })
 })
 

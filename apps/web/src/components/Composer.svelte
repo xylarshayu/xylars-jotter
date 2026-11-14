@@ -98,7 +98,7 @@
     </div>
     {#if picking}
       <div class="picker">
-        {#each app.channels as c (c.id)}
+        {#each app.shownChannels as c (c.id)}
           <button
             class="chip"
             class:on={target?.id === c.id}

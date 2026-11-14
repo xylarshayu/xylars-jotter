@@ -108,6 +108,12 @@ export interface NoteView {
 }
 
 /** Decrypted note, cached by version. Exportable for open channels only. */
+/** First-sync progress: notes received so far, of about `total`. */
+export interface SyncProgress {
+  received: number
+  total: number
+}
+
 export interface PlainEntry {
   id: string
   version: number
@@ -184,15 +190,28 @@ export class Notebook {
 
   /* ------------------------------ sync ------------------------------ */
 
-  async sync(): Promise<{ channels: number; notes: number }> {
+  /**
+   * Pulls every change since the cursor. With `onProgress`, the first page also asks how many
+   * notes are coming, and each page reports how many have arrived.
+   */
+  async sync(
+    opts: { onProgress?: (p: SyncProgress) => void } = {},
+  ): Promise<{ channels: number; notes: number }> {
     let channels = 0
     let notes = 0
+    let total: number | undefined
+    let received = 0
     for (;;) {
-      const page = await this.api.sync(this.replica.cursor)
+      const page = await this.api.sync(this.replica.cursor, {
+        count: !!opts.onProgress && total === undefined,
+      })
+      total ??= page.remaining
+      received += page.notes.length
       const changed = this.replica.apply(page)
       channels += changed.channels.length
       notes += changed.notes.length
       this.replica.cursor = page.cursor
+      opts.onProgress?.({ received, total: Math.max(total ?? 0, received) })
       if (!page.more) break
     }
     if (channels + notes > 0) this.#changed()
@@ -427,24 +446,14 @@ export class Notebook {
   /**
    * Readable notes, newest first. With a channel id: that channel. Without:
    * every open channel (the "all open" feed; locked channels never mix in).
-   * Rows are sorted before decryption, so `limit` keeps big feeds cheap.
+   * Rows are sorted before decryption, so `offset` and `limit` keep big feeds cheap. `skip`
+   * leaves channels out of the all-channels feed.
    */
   async notes(
     channelId?: string,
-    opts: { limit?: number; before?: number } = {},
+    opts: { limit?: number; offset?: number; before?: number; skip?: ReadonlySet<string> } = {},
   ): Promise<NoteView[]> {
-    const rows: NoteRow[] = []
-    for (const row of this.replica.notes.values()) {
-      if (row.deletedAt !== null) continue
-      if (channelId !== undefined && row.channelId !== channelId) continue
-      if (opts.before !== undefined && row.createdAt >= opts.before) continue
-      if (channelId === undefined) {
-        const ch = this.replica.channels.get(row.channelId)
-        if (!ch || !isOpenChannel(ch)) continue
-      }
-      rows.push(row)
-    }
-    rows.sort((a, b) => b.createdAt - a.createdAt || (a.id < b.id ? 1 : -1))
+    const rows = this.#feedRows(channelId, opts.before, opts.skip).slice(opts.offset ?? 0)
     const out: NoteView[] = []
     for (const row of rows) {
       if (opts.limit !== undefined && out.length >= opts.limit) break
@@ -452,6 +461,28 @@ export class Notebook {
       if (v) out.push(v)
     }
     return out
+  }
+
+  /** Where a note sits in `notes(channelId)` (an `offset` that starts at it), or -1. */
+  notePosition(noteId: string, channelId?: string): number {
+    return this.#feedRows(channelId).findIndex((r) => r.id === noteId)
+  }
+
+  /** The rows `notes()` reads, in its order: newest first, ties broken by id. */
+  #feedRows(channelId?: string, before?: number, skip?: ReadonlySet<string>): NoteRow[] {
+    const rows: NoteRow[] = []
+    for (const row of this.replica.notes.values()) {
+      if (row.deletedAt !== null) continue
+      if (channelId !== undefined && row.channelId !== channelId) continue
+      if (skip?.has(row.channelId)) continue
+      if (before !== undefined && row.createdAt >= before) continue
+      if (channelId === undefined) {
+        const ch = this.replica.channels.get(row.channelId)
+        if (!ch || !isOpenChannel(ch)) continue
+      }
+      rows.push(row)
+    }
+    return rows.sort((a, b) => b.createdAt - a.createdAt || (a.id < b.id ? 1 : -1))
   }
 
   /**

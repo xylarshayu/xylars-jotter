@@ -6,7 +6,11 @@
   import Attachment from "./Attachment.svelte"
   import Icon from "./Icon.svelte"
 
-  let { note, showChannel }: { note: NoteView; showChannel: boolean } = $props()
+  let {
+    note,
+    showChannel,
+    inSearch = false,
+  }: { note: NoteView; showChannel: boolean; inSearch?: boolean } = $props()
 
   const selected = $derived(app.selected === note.id)
   const segments = $derived(linkify(note.text))
@@ -45,7 +49,19 @@
     }
   }
 
-  const targets = $derived(app.channels.filter((c) => c.id !== note.channelId))
+  const targets = $derived(app.shownChannels.filter((c) => c.id !== note.channelId))
+
+  // "Jump to" from search: scroll here and mark the note until the mark fades.
+  let el = $state<HTMLElement>()
+  const marked = $derived(app.highlight === note.id)
+  $effect(() => {
+    if (!marked || !el) return
+    el.scrollIntoView({ block: "center" })
+    const t = setTimeout(() => {
+      if (app.highlight === note.id) app.highlight = null
+    }, 2500)
+    return () => clearTimeout(t)
+  })
 
   function warning(to: string): string | null {
     const target = app.channel(to)
@@ -64,7 +80,15 @@
   }
 </script>
 
-<article class="note" class:selected class:pending={note.pending}>
+<article
+  class="note"
+  class:selected
+  class:pending={note.pending}
+  class:marked
+  class:searching={inSearch}
+  data-note={note.id}
+  bind:this={el}
+>
   {#if showChannel && channel}
     <a class="tag" class:locked={channel.lock !== "open"} href="#/c/{note.channelId}">
       {#if channel.lock !== "open"}<Icon name="lock" size={13} />{:else}#{/if}{channelLabel(
@@ -109,6 +133,16 @@
   </div>
 
   <div class="tools">
+    {#if inSearch}
+      <button
+        class="tool"
+        aria-label="Jump to note"
+        title="Jump to it in its channel"
+        onclick={() => app.jumpTo(note)}
+      >
+        <Icon name="jump" size={19} />
+      </button>
+    {/if}
     <button class="tool" aria-label="Copy note" title="Copy" onclick={copy}>
       <Icon name={copied ? "check" : "copy"} size={19} />
     </button>
@@ -195,6 +229,25 @@
   }
   .note.pending {
     opacity: 0.86;
+  }
+  .note.searching {
+    padding-right: 124px;
+  }
+  .note.marked {
+    animation: mark 2.5s ease-out;
+  }
+  @keyframes mark {
+    0%,
+    40% {
+      border-color: var(--accent);
+      background: color-mix(in srgb, var(--accent) 14%, var(--surface));
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .note.marked {
+      animation: none;
+      border-color: var(--accent);
+    }
   }
   .tag {
     display: inline-flex;

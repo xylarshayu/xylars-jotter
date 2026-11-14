@@ -25,9 +25,10 @@ tool, and it has not had an independent security audit. Read the
 
 - **Web app (PWA)**: feed per channel and across open channels, composer always at hand
   (Enter sends), search including link previews (their images kept as small thumbnails,
-  [ADR-0020](docs/adr/0020-small-preview-images.md)), one-tap copy, files of any type up to 95 MB (images and GIFs inline,
-  [ADR-0017](docs/adr/0017-any-file-attachments.md)), edit/move/delete with
-  history, Android share target, offline outbox, light/dark. A new browser signs in by showing
+  [ADR-0020](docs/adr/0020-small-preview-images.md)) with "Jump to" a result among the notes
+  around it, channels hidden per device ([ADR-0021](docs/adr/0021-hidden-channels.md)),
+  one-tap copy, files of any type up to 95 MB (images and GIFs inline,
+  [ADR-0017](docs/adr/0017-any-file-attachments.md)), edit/move/delete with history, Android share target, offline outbox, light/dark. A new browser signs in by showing
   a QR that the phone scans and approves, with no login on that browser. It can be a temporary
   device that keeps nothing. Settings → Devices signs paired devices out
   ([ADR-0016](docs/adr/0016-device-pairing.md), [ADR-0019](docs/adr/0019-device-sessions.md)).

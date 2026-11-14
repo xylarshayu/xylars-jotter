@@ -27,6 +27,7 @@ import {
   type NoteView,
   type PairingOffer,
   type PairingRequest,
+  type SyncProgress,
 } from "@jot/core"
 import { CryptoError, generateKeyPair, isHybridIdentity, parseIdentity } from "@jot/crypto"
 import { startAutoLock } from "./autolock.ts"
@@ -92,6 +93,11 @@ export function describe(e: unknown): string {
   return "Something went wrong."
 }
 
+/** Resolves after the browser has painted pending DOM changes. */
+function nextPaint(): Promise<void> {
+  return new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)))
+}
+
 export function channelLabel(c: Pick<ChannelView, "id" | "name"> | undefined): string {
   if (!c) return "Unknown channel"
   return c.name ?? `Locked · ${c.id.slice(-4)}`
@@ -103,6 +109,14 @@ class App {
   channels = $state.raw<ChannelView[]>([])
   feed = $state.raw<NoteView[]>([])
   feedMore = $state(false)
+  /** The feed starts below the newest note, after "Jump to" from search. */
+  feedNewer = $state(false)
+  /** The note "Jump to" opened at: Feed scrolls to it and marks it briefly. */
+  highlight = $state<string | null>(null)
+  /** Hidden channels are listed until the app goes to the background (ADR-0021). */
+  showHidden = $state(false)
+  /** The first sync while setting this device up, for a progress bar. */
+  setupProgress = $state.raw<SyncProgress | null>(null)
   searching = $state(false)
   query = $state("")
   results = $state.raw<NoteView[]>([])
@@ -135,7 +149,10 @@ class App {
   #session: { token: string; deviceId: string } | null = null
   #db!: Db
   #persist!: Persist
+  /** The feed shows notes [#offset, #offset + #limit) of the channel, newest first. */
+  #offset = 0
   #limit = PAGE
+  #jumpTo: string | null = null
   #gen = 0
   #refreshQueued = false
   #saveTimer: ReturnType<typeof setTimeout> | undefined
@@ -170,8 +187,23 @@ class App {
   /** Where the composer sends: the open channel, or (in "All notes") the last used one. */
   get target(): ChannelView | undefined {
     if (this.current) return this.current
-    const open = this.channels.filter((c) => c.lock === "open")
-    return this.channels.find((c) => c.id === this.composeTo) ?? open[0] ?? this.channels[0]
+    const shown = this.shownChannels
+    const open = shown.filter((c) => c.lock === "open")
+    return shown.find((c) => c.id === this.composeTo) ?? open[0] ?? shown[0]
+  }
+
+  /** Hidden on this device and not being shown (ADR-0021). */
+  hidden(channelId: string): boolean {
+    return !this.showHidden && this.settings.hiddenChannels.includes(channelId)
+  }
+
+  /** The channels lists and pickers offer: everything not hidden. */
+  get shownChannels(): ChannelView[] {
+    return this.channels.filter((c) => !this.hidden(c.id))
+  }
+
+  get hiddenChannels(): ChannelView[] {
+    return this.channels.filter((c) => this.settings.hiddenChannels.includes(c.id))
   }
 
   get enterSends(): boolean {
@@ -239,6 +271,8 @@ class App {
 
   async #ready(): Promise<void> {
     this.openRecipient = this.nb.keys.openRecipient ?? ""
+    // Channels first: the composer needs a target the moment it appears.
+    this.channels = await this.nb.channelViews()
     this.phase = "ready"
     await this.refresh()
     this.#background()
@@ -254,7 +288,10 @@ class App {
     addEventListener("offline", () => (this.online = false))
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState === "visible") void this.sync()
-      else void this.save()
+      else {
+        void this.save()
+        this.setShowHidden(false)
+      }
     })
     addEventListener("pagehide", () => void this.save())
     setInterval(() => {
@@ -311,10 +348,12 @@ class App {
     if (opts.temporary && !this.temporary) await this.#becomeTemporary()
     await this.nb.keys.setOpenKey(key)
     try {
-      await this.nb.sync()
+      await this.nb.sync({ onProgress: (p) => (this.setupProgress = p) })
     } catch (e) {
       this.nb.keys.clear()
       return describe(e)
+    } finally {
+      this.setupProgress = null
     }
     const open = [...this.nb.replica.channels.values()].filter(
       (c) => c.deletedAt === null && isOpenChannel(c),
@@ -554,7 +593,14 @@ class App {
     if (r.view === "feed") {
       const ch = r.channel === ALL ? undefined : r.channel
       if (!ch || this.nb.replica.channels.has(ch)) {
-        const notes = await this.nb.notes(ch, { limit: this.#limit + 1 })
+        const notes = await this.nb.notes(ch, {
+          offset: this.#offset,
+          limit: this.#limit + 1,
+          // "All notes" leaves hidden channels out. A hidden channel itself still opens.
+          skip: ch
+            ? undefined
+            : new Set(this.settings.hiddenChannels.filter((id) => this.hidden(id))),
+        })
         more = notes.length > this.#limit
         feed = notes.slice(0, this.#limit)
       }
@@ -565,18 +611,47 @@ class App {
     this.channels = channels
     this.feed = feed
     this.feedMore = more
+    this.feedNewer = this.#offset > 0
     this.results = results
     this.pending = pending
   }
 
-  loadOlder(): void {
+  loadOlder(): Promise<void> {
     this.#limit += PAGE
+    return this.refresh()
+  }
+
+  /** After a jump: brings in the next page of newer notes. */
+  loadNewer(): Promise<void> {
+    const step = Math.min(PAGE, this.#offset)
+    this.#offset -= step
+    this.#limit += step
+    return this.refresh()
+  }
+
+  /** Back to the newest notes, e.g. after sending from a feed that starts further back. */
+  #toNewest(): void {
+    if (!this.#offset) return
+    this.#offset = 0
+    this.#limit = PAGE
     void this.refresh()
   }
 
   #onRoute(): void {
     this.route = parseHash(location.hash)
+    this.#offset = 0
     this.#limit = PAGE
+    const jump = this.#jumpTo
+    this.#jumpTo = null
+    if (jump && this.route.view === "feed") {
+      const ch = this.route.channel === ALL ? undefined : this.route.channel
+      const at = this.nb.notePosition(jump, ch)
+      if (at >= 0) {
+        // Half a page of newer notes below it, the rest older above; both directions load more.
+        this.#offset = Math.max(0, at - PAGE / 2)
+        this.highlight = jump
+      }
+    }
     this.selected = null
     this.panel = null
     this.drawer = false
@@ -608,7 +683,14 @@ class App {
   }
 
   async #search(): Promise<NoteView[]> {
-    return (await this.nb.search(this.query)).slice(0, 200)
+    return (await this.nb.search(this.query)).filter((n) => !this.hidden(n.channelId)).slice(0, 200)
+  }
+
+  /** Opens a search result in its channel, among the notes around it. */
+  jumpTo(n: NoteView): void {
+    this.#jumpTo = n.id
+    this.closeSearch()
+    this.go({ view: "feed", channel: n.channelId })
   }
 
   /* ------------------------------ notes ----------------------------- */
@@ -638,6 +720,7 @@ class App {
         )
       }
       const note = await this.nb.addNote(to.id, text, { attachments })
+      this.#toNewest()
       if (this.route.view === "feed" && this.route.channel === ALL) this.#remember(to.id)
       if (to.lock !== "open" && !to.unlocked) this.toast("Added to the locked channel.")
       // Previews: automatic in open channels only; locked channels ask first.
@@ -794,14 +877,18 @@ class App {
 
   /* ------------------------------ locking ---------------------------- */
 
+  /** Resolves once the channel's notes are on screen, so "Unlocking…" covers all of it. */
   async unlock(channelId: string, passphrase: string): Promise<boolean> {
+    // scrypt runs on this thread and blocks it for a second or two: paint "Unlocking…" first.
+    await nextPaint()
     try {
       await this.nb.unlock(channelId, passphrase)
-      this.#autolock?.touch()
-      return true
     } catch {
       return false
     }
+    this.#autolock?.touch()
+    await this.refresh()
+    return true
   }
 
   lockAll(): void {
@@ -826,6 +913,26 @@ class App {
   }
 
   /* ----------------------------- settings ---------------------------- */
+
+  /** Hides a channel on this device only. Its notes stay as they are (ADR-0021). */
+  setHidden(channelId: string, hide: boolean): void {
+    const ids = this.settings.hiddenChannels.filter((id) => id !== channelId)
+    this.updateSettings({ hiddenChannels: hide ? [...ids, channelId] : ids })
+    if (!hide) return void this.refresh()
+    this.toast("Hidden on this device. Show hidden channels from the sidebar.")
+    // Hiding means out of sight now, even while hidden channels are being shown.
+    this.showHidden = true
+    this.setShowHidden(false)
+  }
+
+  setShowHidden(show: boolean): void {
+    if (this.showHidden === show) return
+    this.showHidden = show
+    const r = this.route
+    if (!show && r.view === "feed" && this.hidden(r.channel))
+      this.go({ view: "feed", channel: ALL })
+    else void this.refresh()
+  }
 
   updateSettings(patch: Partial<Settings>): void {
     this.settings = { ...this.settings, ...patch }

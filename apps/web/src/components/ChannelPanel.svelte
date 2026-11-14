@@ -8,6 +8,7 @@
   let oldPass = $state("")
   let newPass = $state("")
   let busy = $state(false)
+  const hiddenHere = $derived(app.settings.hiddenChannels.includes(channel.id))
 
   function start(m: typeof mode) {
     mode = m
@@ -50,12 +51,20 @@
           <button class="btn ghost" onclick={() => app.lock(channel.id)}>Lock</button>
         {/if}
       {/if}
+      {#if hiddenHere}
+        <button class="btn ghost" onclick={() => app.setHidden(channel.id, false)}>Unhide</button>
+      {:else}
+        <button class="btn ghost" onclick={() => app.setHidden(channel.id, true)}>Hide</button>
+      {/if}
       <button class="btn ghost danger" onclick={() => start("delete")}>Delete channel</button>
     </div>
     <p class="hint">
       {channel.lock === "open"
         ? "Open channel: readable by your devices and agents with the open key."
         : "Locked channel: notes readable only with its passphrase. Its name is readable with the open key. Anyone with access can still add notes."}
+      {hiddenHere
+        ? "Hidden on this device: left out of the sidebar, All notes and search until you show hidden channels."
+        : ""}
     </p>
   {:else if mode === "rename"}
     <form class="row" onsubmit={rename}>

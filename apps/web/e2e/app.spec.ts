@@ -89,6 +89,79 @@ test("a second device with the same key sees the notes, and search works", async
   await expect(feed(page).getByText("synthetic first note")).toHaveCount(0)
 })
 
+test("jumps from a search result to the notes around it; hides a channel on this device", async ({
+  page,
+}) => {
+  await pasteKey(page)
+  await page.getByRole("button", { name: "New channel" }).click()
+  await page.getByRole("textbox", { name: "Channel name" }).fill("Synthetic log")
+  await page.getByRole("button", { name: "Create", exact: true }).click()
+  await expect(page.getByRole("link", { name: "Synthetic log" })).toBeVisible()
+
+  // 150 old notes, more than two pages, imported through Settings. Older than every other note,
+  // so "All notes" still opens on the notes the other tests look for.
+  const n = (i: number) => `synthetic log ${String(i).padStart(3, "0")}`
+  const lines = Array.from({ length: 150 }, (_, i) =>
+    JSON.stringify({
+      channel: "Synthetic log",
+      created_at: new Date(Date.UTC(2020, 0, 1, 0, i)).toISOString(),
+      text: n(i),
+      source_id: `e2e-log-${i}`,
+    }),
+  )
+  await page.goto("/#/settings")
+  await page.locator('input[type="file"][accept*="jsonl"]').setInputFiles({
+    name: "synthetic.jsonl",
+    mimeType: "application/jsonl",
+    buffer: Buffer.from(lines.join("\n")),
+  })
+  await expect(page.getByText(/Imported 150|Queued 150/)).toBeVisible({ timeout: 20_000 })
+
+  await page.goto("/#/")
+  await page.keyboard.press("/")
+  await page.getByRole("searchbox", { name: "Search notes" }).fill(n(20))
+  await expect(feed(page).getByText(n(20))).toBeVisible()
+  await page.getByRole("button", { name: "Jump to note" }).click()
+
+  // The channel opens at that note with its neighbours on both sides, not at the newest note.
+  await expect(page.getByRole("searchbox", { name: "Search notes" })).toHaveCount(0)
+  const target = feed(page).locator("article", { hasText: n(20) })
+  await expect(target).toHaveClass(/marked/)
+  await expect(target).toBeInViewport()
+  for (const i of [19, 21]) await expect(feed(page).getByText(n(i), { exact: true })).toBeVisible()
+  await expect(feed(page).getByText(n(149))).toHaveCount(0)
+  // Scrolling down brings in the newer notes, a page at a time.
+  await expect(target).not.toHaveClass(/marked/)
+  await expect
+    .poll(
+      async () => {
+        await feed(page).locator("[data-note]").first().scrollIntoViewIfNeeded()
+        return feed(page).getByText(n(149)).count()
+      },
+      { timeout: 15_000 },
+    )
+    .toBe(1)
+
+  // Hidden: out of the sidebar, All notes and search, until shown again. Nothing else changes.
+  await page.getByRole("button", { name: "Channel options" }).click()
+  await page.getByRole("button", { name: "Hide", exact: true }).click()
+  await expect(page.getByRole("link", { name: "Synthetic log" })).toHaveCount(0)
+  await expect(feed(page).getByText("synthetic first note")).toBeVisible()
+  await page.keyboard.press("/")
+  await page.getByRole("searchbox", { name: "Search notes" }).fill("synthetic log")
+  await expect(feed(page).getByText("No notes match.")).toBeVisible()
+  await page.keyboard.press("Escape")
+  await page.reload()
+  await expect(page.getByRole("link", { name: "Synthetic log" })).toHaveCount(0)
+  await page.getByRole("button", { name: "Show 1 hidden channel" }).click()
+  await page.getByRole("link", { name: "Synthetic log" }).click()
+  await expect(feed(page).getByText(n(149))).toBeVisible()
+  await page.getByRole("button", { name: "Channel options" }).click()
+  await page.getByRole("button", { name: "Unhide" }).click()
+  await expect(page.getByRole("link", { name: "Synthetic log" })).toBeVisible()
+  await expect(page.getByRole("button", { name: /hidden channel/ })).toHaveCount(0)
+})
+
 test("attaches any file type: chips download, GIFs stay inline and untouched", async ({ page }) => {
   await pasteKey(page)
   // A synthetic 2x3 GIF (header, empty colour table, one image block) and an opaque archive.

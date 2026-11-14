@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from "svelte"
   import { ALL, app } from "../lib/app.svelte.ts"
   import { dayKey, dayLabel } from "../lib/dates.ts"
   import LockPanel from "./LockPanel.svelte"
@@ -12,23 +13,46 @@
   )
   const locked = $derived(!searching && current !== undefined && !current.readable)
 
-  let sentinel = $state<HTMLElement>()
-  $effect(() => {
-    const el = sentinel
-    if (!el) return
+  let feedEl = $state<HTMLElement>()
+  let older = $state<HTMLElement>()
+  let newer = $state<HTMLElement>()
+
+  /**
+   * Loads a page when a sentinel nears the viewport. Not while a jump is scrolling to its note:
+   * the observer starts once the mark clears, and its first report says whether one is near.
+   */
+  function watch(el: HTMLElement | undefined, load: () => Promise<void>) {
+    if (!el || app.highlight) return
     const io = new IntersectionObserver(
       (es) => {
-        if (es.some((e) => e.isIntersecting) && app.feedMore) app.loadOlder()
+        if (es.some((e) => e.isIntersecting)) void load()
       },
-      { root: el.parentElement, rootMargin: "600px 0px" },
+      { root: feedEl, rootMargin: "600px 0px" },
     )
     io.observe(el)
     return () => io.disconnect()
-  })
+  }
+
+  $effect(() => watch(older, () => app.loadOlder()))
+
+  // Newer notes go in below the ones on screen. Keep what's in view where it is: the feed is
+  // column-reverse, so its scroll position counts from the bottom and would otherwise jump.
+  $effect(() =>
+    watch(newer, async () => {
+      const box = feedEl!
+      const ref = box.querySelector<HTMLElement>("[data-note]")
+      const top = ref?.getBoundingClientRect().top
+      await app.loadNewer()
+      await tick()
+      if (ref?.isConnected && top !== undefined)
+        box.scrollTop += ref.getBoundingClientRect().top - top
+    }),
+  )
 </script>
 
 <!-- column-reverse keeps the newest note at the bottom, next to the composer -->
-<section class="feed" aria-label={searching ? "Search results" : "Notes"}>
+<section class="feed" aria-label={searching ? "Search results" : "Notes"} bind:this={feedEl}>
+  {#if app.feedNewer && !searching && !locked}<div class="sentinel" bind:this={newer}></div>{/if}
   {#if locked && current}
     <LockPanel channel={current} />
   {:else if !notes.length}
@@ -50,7 +74,7 @@
   {/if}
   {#if !locked}
     {#each notes as note, i (note.id)}
-      <NoteItem {note} {showChannel} />
+      <NoteItem {note} {showChannel} inSearch={searching} />
       {#if !searching && (i === notes.length - 1 || dayKey(note.createdAt) !== dayKey(notes[i + 1]!.createdAt))}
         <div class="day"><span>{dayLabel(note.createdAt)}</span></div>
       {/if}
@@ -64,7 +88,7 @@
         >
       </div>
     {/if}
-    {#if app.feedMore && !searching}<div class="sentinel" bind:this={sentinel}></div>{/if}
+    {#if app.feedMore && !searching}<div class="sentinel" bind:this={older}></div>{/if}
   {/if}
 </section>
 

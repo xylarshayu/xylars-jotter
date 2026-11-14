@@ -122,7 +122,7 @@
             autocapitalize="off"
             spellcheck="false"></textarea>
           <button class="btn ghost wide" disabled={busy || !key.trim()}
-            >{busy ? "Checking…" : "Use this key"}</button
+            >{busy ? "Setting up…" : "Use this key"}</button
           >
         </form>
         {#if !temporary}
@@ -135,6 +135,17 @@
           >Sign in to paste or create a key</button
         >
       {/if}
+    {/if}
+
+    {#if app.setupProgress}
+      {@const p = app.setupProgress}
+      <div class="progress" role="status">
+        <progress max={p.total || 1} value={p.received} aria-label="Downloading notes"></progress>
+        <span
+          >Downloading your notes… {p.received.toLocaleString()}
+          {#if p.total}of {p.total.toLocaleString()}{/if}</span
+        >
+      </div>
     {/if}
 
     <p class="error" role="alert">{error}</p>
@@ -152,6 +163,35 @@
     width: min(100%, 460px);
     display: grid;
     gap: 14px;
+  }
+  .progress {
+    display: grid;
+    gap: 6px;
+    font-size: 0.9rem;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+  }
+  .progress progress {
+    width: 100%;
+    height: 6px;
+    appearance: none;
+    border: 0;
+    border-radius: 999px;
+    overflow: hidden;
+    background: var(--surface-2);
+    accent-color: var(--accent);
+  }
+  .progress progress::-webkit-progress-bar {
+    background: var(--surface-2);
+  }
+  .progress progress::-webkit-progress-value {
+    background: var(--accent);
+    border-radius: 999px;
+    transition: width 0.2s ease;
+  }
+  .progress progress::-moz-progress-bar {
+    background: var(--accent);
+    border-radius: 999px;
   }
   .brand {
     display: flex;

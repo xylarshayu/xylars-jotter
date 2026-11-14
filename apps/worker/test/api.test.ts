@@ -212,7 +212,7 @@ describe("notes", () => {
     await reader.keys.setOpenKey(open.identity)
     let pages = 0
     for (;;) {
-      const page = await reader.api.sync(reader.replica.cursor, 3)
+      const page = await reader.api.sync(reader.replica.cursor, { limit: 3 })
       reader.replica.apply(page)
       reader.replica.cursor = page.cursor
       pages++
@@ -231,7 +231,7 @@ describe("notes", () => {
     await reader.keys.setOpenKey(open.identity)
     const seen: string[] = []
     for (;;) {
-      const page = await reader.api.sync(reader.replica.cursor, 1000)
+      const page = await reader.api.sync(reader.replica.cursor, { limit: 1000 })
       const bytes = page.notes.reduce((n, r) => n + r.body.length * 0.75, 0)
       expect(bytes).toBeLessThan(PAGE_BYTES + 64 * 1024) // the budget plus at most one note
       seen.push(...page.notes.filter((r) => r.channelId === ch.id).map((r) => r.id))
@@ -242,6 +242,54 @@ describe("notes", () => {
     expect(new Set(seen).size).toBe(8)
     expect(seen).toHaveLength(8)
     expect(await reader.notes(ch.id)).toHaveLength(8)
+  })
+
+  it("counts what a first sync brings, so a new device can show progress", async () => {
+    const { nb, open } = await notebook()
+    const ch = await nb.createChannel({ name: "Inbox", lock: "open" })
+    for (let i = 0; i < 5; i++) await nb.addNote(ch.id, `synthetic ${i}`)
+
+    const first = await api().sync(0, { limit: 2, count: true })
+    expect(first.remaining).toBeGreaterThanOrEqual(5) // storage is shared across tests in this file
+    expect((await api().sync(0, { limit: 2 })).remaining).toBeUndefined()
+
+    const reader = new Notebook({ api: api() })
+    await reader.keys.setOpenKey(open.identity)
+    const seen: { received: number; total: number }[] = []
+    await reader.sync({ onProgress: (p) => seen.push(p) })
+    const last = seen.at(-1)!
+    expect(last.received).toBe(last.total)
+    expect(last.total).toBe(first.remaining)
+    expect(seen.map((p) => p.received)).toEqual(
+      [...seen.map((p) => p.received)].sort((a, b) => a - b),
+    )
+  })
+
+  it("opens a feed at any note, for jumping to it from search", async () => {
+    const { nb } = await notebook()
+    const ch = await nb.createChannel({ name: "Inbox", lock: "open" })
+    const t0 = Date.UTC(2024, 0, 1)
+    // Two notes share a timestamp, as Telegram imports often do: the order still holds.
+    const times = [0, 1, 2, 2, 3, 4].map((m) => t0 + m * 60_000)
+    const ids: string[] = []
+    for (const [i, at] of times.entries())
+      ids.push((await nb.addNote(ch.id, `synthetic ${i}`, { createdAt: at })).id)
+
+    const all = (await nb.notes(ch.id)).map((n) => n.id)
+    expect(new Set(all)).toEqual(new Set(ids))
+    for (const id of ids) {
+      const at = nb.notePosition(id, ch.id)
+      expect(all[at]).toBe(id)
+      const window = await nb.notes(ch.id, { offset: Math.max(0, at - 1), limit: 3 })
+      expect(window.map((n) => n.id)).toEqual(
+        all.slice(Math.max(0, at - 1), Math.max(0, at - 1) + 3),
+      )
+    }
+    expect(nb.notePosition("01NOTANOTE0000000000000000", ch.id)).toBe(-1)
+    // "All notes" can leave channels out.
+    expect(await nb.notes(undefined, { skip: new Set([ch.id]) })).not.toContainEqual(
+      expect.objectContaining({ channelId: ch.id }),
+    )
   })
 
   it("searches text and link previews, newest first", async () => {
@@ -508,7 +556,7 @@ describe("store copy: dump and restore (ADR-0015)", () => {
   async function syncAll(a: Api) {
     const out = { channels: [] as ChannelRow[], notes: [] as NoteRow[], cursor: 0 }
     for (;;) {
-      const page = await a.sync(out.cursor, 1000)
+      const page = await a.sync(out.cursor, { limit: 1000 })
       out.channels.push(...page.channels)
       out.notes.push(...page.notes)
       out.cursor = page.cursor
@@ -614,7 +662,7 @@ describe("pairing and device sessions (ADR-0016, ADR-0019)", () => {
   it("signs a new device in with one approval, and relays the open key sealed to it", async () => {
     const access = api()
     const open = await generateKeyPair()
-    const before = (await access.sync(0, 1)).cursor
+    const before = (await access.sync(0, { limit: 1 })).cursor
     const ua =
       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/142.0.0.0 Safari/537.36"
     // The new device isn't signed in to anything.
@@ -664,7 +712,7 @@ describe("pairing and device sessions (ADR-0016, ADR-0019)", () => {
       userId: "u_dev",
       device: { id: paired.device.id, temporary: false },
     })
-    expect((await device.sync(0, 1)).cursor).toBe(before)
+    expect((await device.sync(0, { limit: 1 })).cursor).toBe(before)
     await expect(device.dump("notes")).rejects.toMatchObject({ status: 404 })
     expect(
       (
@@ -674,7 +722,7 @@ describe("pairing and device sessions (ADR-0016, ADR-0019)", () => {
       ).status,
     ).toBe(200)
     // Pairing is not a change: sync and the restore gate don't see it.
-    expect((await access.sync(0, 1)).cursor).toBe(before)
+    expect((await access.sync(0, { limit: 1 })).cursor).toBe(before)
   })
 
   it("answers a wrong secret exactly like an unknown pairing", async () => {
@@ -809,7 +857,10 @@ describe("pairing and device sessions (ADR-0016, ADR-0019)", () => {
       code: "temporary_device",
     })
     await a.api.revokeDevice(b.device.id)
-    await expect(b.api.sync(0, 1)).rejects.toMatchObject({ status: 401, code: "session_revoked" })
+    await expect(b.api.sync(0, { limit: 1 })).rejects.toMatchObject({
+      status: 401,
+      code: "session_revoked",
+    })
     await expect(a.api.revokeDevice(b.device.id)).rejects.toMatchObject({ status: 404 })
     await t.api.revokeDevice(t.device.id)
     await expect(t.api.me()).rejects.toMatchObject({ code: "session_revoked" })

@@ -41,7 +41,9 @@
     />
     <button class="btn" disabled={busy || !pass}>{busy ? "Unlocking…" : "Unlock"}</button>
   </form>
-  <p class="status" role="status">{failed ? "Wrong passphrase." : ""}</p>
+  <p class="status" role="status">
+    {failed ? "Wrong passphrase." : busy ? "Checking the passphrase and decrypting…" : ""}
+  </p>
   {#if channel.name === null}
     <p class="faint">
       Its name is hidden from your other devices until you unlock it once (or rename it).
