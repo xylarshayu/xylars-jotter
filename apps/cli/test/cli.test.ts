@@ -16,6 +16,7 @@ import { Api, fitPreviewImage, MAX_PREVIEW_IMAGE, newChannel, Notebook } from "@
 import { parseIdentity } from "@jot/crypto"
 import { shrinkPreviewImage } from "../src/images.ts"
 import { run } from "../src/main.ts"
+import { imageProtocol } from "../src/terminal-images.ts"
 import { restoreChunks } from "../src/migrate.ts"
 import type { Io } from "../src/context.ts"
 
@@ -24,7 +25,7 @@ const PASS = "synthetic-passphrase-for-tests-only"
 const home = mkdtempSync(join(tmpdir(), "jot-cli-home-"))
 const keyFile = join(home, "open-key.txt")
 
-function io(stdin = "", extraEnv: Record<string, string> = {}) {
+function io(stdin = "", extraEnv: Record<string, string> = {}, tty?: { columns: number }) {
   const out: string[] = []
   const err: string[] = []
   const i: Io = {
@@ -32,6 +33,8 @@ function io(stdin = "", extraEnv: Record<string, string> = {}) {
     err: (s) => err.push(s),
     readStdin: async () => stdin,
     stdinIsTty: false,
+    stdoutIsTty: Boolean(tty),
+    columns: tty?.columns,
     env: {
       HOME: home,
       JOT_SERVER: inject("serverUrl"),
@@ -330,6 +333,78 @@ describe("jot", () => {
     expect(r.code).toBe(1)
     expect(r.err).toContain("locked")
     expect(readdirSync(dir)).toEqual(["sealed.txt"])
+  })
+
+  describe("show", () => {
+    let id = ""
+    beforeAll(async () => {
+      const dir = mkdtempSync(join(tmpdir(), "jot-cli-show-"))
+      await sharp({ create: { width: 120, height: 80, channels: 3, background: "#3a6" } })
+        .jpeg()
+        .toFile(join(dir, "synthetic.jpg"))
+      writeFileSync(join(dir, "synthetic.txt"), "synthetic attachment")
+      const files = [join(dir, "synthetic.jpg"), join(dir, "synthetic.txt")]
+      id = (
+        await ok(["add", "-c", "Inbox", "synthetic note with a picture", "-f", ...files])
+      ).trim()
+    })
+    async function show(
+      env: Record<string, string>,
+      tty?: { columns: number },
+      args = ["show", id],
+    ) {
+      const { i, out, err } = io("", env, tty)
+      const code = await run(args, i)
+      return { code, out: out.join("\n"), err: err.join("\n") }
+    }
+
+    it("knows which terminals draw images", () => {
+      expect(imageProtocol({ TERM_PROGRAM: "ghostty" }, true)).toBe("kitty")
+      expect(imageProtocol({ TERM: "xterm-ghostty" }, true)).toBe("kitty")
+      expect(imageProtocol({ TERM: "xterm-kitty" }, true)).toBe("kitty")
+      expect(imageProtocol({ TERM_PROGRAM: "iTerm.app" }, true)).toBe("iterm")
+      expect(imageProtocol({ TERM_PROGRAM: "WezTerm" }, true)).toBe("iterm")
+      expect(imageProtocol({ TERM_PROGRAM: "Apple_Terminal" }, true)).toBeNull()
+      expect(imageProtocol({ TERM_PROGRAM: "ghostty", TMUX: "/tmp/tmux" }, true)).toBeNull()
+      expect(imageProtocol({ TERM_PROGRAM: "ghostty" }, false)).toBeNull()
+    })
+
+    it("draws images with the kitty protocol in Ghostty", async () => {
+      const r = await show({ TERM_PROGRAM: "ghostty" }, { columns: 100 })
+      expect(r.code).toBe(0)
+      expect(r.out).toContain("synthetic note with a picture")
+      expect(r.out).toContain("synthetic.txt")
+      // 120 px wide is 12 cells, one chunk.
+      // eslint-disable-next-line no-control-regex -- the escape codes are what is tested
+      expect(r.out).toMatch(/\x1b_Ga=T,f=100,q=2,c=12,m=0;[A-Za-z0-9+/=]+\x1b\\/)
+      expect(r.out).not.toContain("work in")
+    })
+
+    it("draws images with iTerm2's protocol in WezTerm", async () => {
+      const r = await show({ TERM_PROGRAM: "WezTerm" }, { columns: 100 })
+      // eslint-disable-next-line no-control-regex -- the escape codes are what is tested
+      expect(r.out).toMatch(/\x1b\]1337;File=inline=1;size=\d+;width=12;preserveAspectRatio=1:/)
+    })
+
+    it("says where images work in other terminals, and stays plain when piped", async () => {
+      const r = await show({ TERM_PROGRAM: "Apple_Terminal" }, { columns: 100 })
+      expect(r.out).toContain("work in Ghostty, kitty, WezTerm and iTerm2")
+      expect(r.out).not.toContain("\x1b")
+      const piped = await show({ TERM_PROGRAM: "ghostty" })
+      expect(piped.out).toContain("synthetic.jpg")
+      expect(piped.out).not.toContain("\x1b")
+      expect(piped.out).not.toContain("work in")
+    })
+
+    it("needs unlock for a locked note", async () => {
+      const locked = (await ok(["add", "-c", vault, "synthetic sealed note"])).trim()
+      const r = await show({ TERM_PROGRAM: "ghostty" }, { columns: 100 }, ["show", locked])
+      expect(r.code).toBe(1)
+      expect(r.err).toContain("jot unlock")
+      const { i, out } = io(PASS + "\n", { TERM_PROGRAM: "ghostty" }, { columns: 100 })
+      expect(await run(["unlock", vault, "show", locked], i)).toBe(0)
+      expect(out.join("\n")).toContain("synthetic sealed note")
+    })
   })
 
   it("exports Markdown, JSONL and age files; Go age can decrypt a locked note with the passphrase", async () => {

@@ -82,6 +82,7 @@ jot add -c Inbox "a synthetic note https://example.com"
 jot search synthetic --json
 jot add -c Inbox -f report.pdf archive.zip       # any file, up to 95 MB each
 jot files <note-id> -o ~/Downloads             # open channels only; never overwrites
+jot show <note-id>                             # images drawn inline in Ghostty, kitty, WezTerm, iTerm2
 printf 'a synthetic passphrase\n' | jot channels create Vault --locked
 echo "appended without unlocking" | jot add -c <vault-id>   # id from `jot channels`
 printf 'a synthetic passphrase\n' | jot unlock Vault list -c Vault   # passphrase on stdin only

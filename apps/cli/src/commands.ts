@@ -10,11 +10,19 @@ import {
   MAX_ATTACHMENT_PLAIN_BYTES,
   MAX_PREVIEW_IMAGE,
   type NoteView,
+  parseImageDataUrl,
   parseImportLine,
 } from "@jot/core"
 import { generateKeyPair } from "@jot/crypto"
 import { CliError, type Context, type Io, writePrivate } from "./context.ts"
 import { shrinkPreviewImage } from "./images.ts"
+import {
+  IMAGE_TERMINALS,
+  imageEscape,
+  imageProtocol,
+  isPreviewable,
+  MAX_IMAGE_BYTES,
+} from "./terminal-images.ts"
 
 export interface OutputOpts {
   json?: boolean
@@ -238,6 +246,56 @@ export async function read(
   ctx.io.out("")
   ctx.io.out(view.text)
   for (const h of history ?? []) ctx.io.out(`\n--- v${h.version} (${iso(h.createdAt)})\n${h.text}`)
+}
+
+function sizeLabel(n: number): string {
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${Math.round(n / 1024)} KB`
+  return `${(n / 1024 / 1024).toFixed(1)} MB`
+}
+
+/**
+ * A note for people: its text, link previews and attachments, with images drawn in terminals
+ * that can. Images go to the screen only, so this works for an unlocked locked channel too.
+ */
+export async function show(ctx: Context, id: string): Promise<void> {
+  const row = ctx.nb.replica.notes.get(id.toUpperCase())
+  if (!row || row.deletedAt !== null) throw new CliError("no such note")
+  const view = await ctx.nb.noteView(row)
+  if (!view) throw new CliError("note is in a locked channel; use `jot unlock <channel> show <id>`")
+  const protocol = imageProtocol(ctx.io.env, ctx.io.stdoutIsTty ?? false)
+  const cols = Math.max(10, Math.min((ctx.io.columns ?? 80) - 2, 72))
+  let skipped = false
+  const draw = async (data: Uint8Array, mime: string): Promise<void> => {
+    if (!isPreviewable(mime) || data.length > MAX_IMAGE_BYTES) return
+    if (!protocol) {
+      skipped = true
+      return
+    }
+    const esc = await imageEscape(data, protocol, cols)
+    ctx.io.out(esc ?? "  (can't draw this image here)")
+  }
+
+  ctx.io.out(`#${await channelLabel(ctx, view.channelId)} · ${short(view.createdAt)} · ${view.id}`)
+  if (view.text) ctx.io.out(`\n${view.text}`)
+  for (const p of view.previews) {
+    ctx.io.out(`\n🔗 ${[p.site, p.title].filter(Boolean).join(" · ") || p.url}`)
+    if (p.description) ctx.io.out(`   ${p.description}`)
+    ctx.io.out(`   ${p.url}`)
+    const img = p.image ? parseImageDataUrl(p.image) : undefined
+    if (img) await draw(Buffer.from(img.base64, "base64"), img.mime)
+  }
+  for (const a of view.attachments) {
+    ctx.io.out(`\n📎 ${a.name ?? a.id}  ${a.mime}  ${sizeLabel(a.size)}`)
+    if (isPreviewable(a.mime) && a.size <= MAX_IMAGE_BYTES)
+      await draw(await ctx.nb.readAttachment(row.channelId, a), a.mime)
+  }
+  // Only for people at a terminal; piped output (scripts, agents) stays plain.
+  if (skipped && ctx.io.stdoutIsTty)
+    ctx.io.out(
+      `\nImage previews in the terminal work in ${IMAGE_TERMINALS}, outside tmux. ` +
+        `\`jot files ${view.id}\` saves the files.`,
+    )
 }
 
 /** A safe local file name from an attachment's stored name. */

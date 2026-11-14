@@ -51,7 +51,10 @@ async function server(): Promise<string> {
 
 export async function setup(project: TestProject) {
   // The second server is an empty "deployment" for `jot migrate`.
-  const [main, target] = await Promise.all([server(), server()])
+  // One at a time: two `wrangler dev`s starting together can race for the same internal socket
+  // ("Address already in use (socket direct:1:default)").
+  const main = await server()
+  const target = await server()
   project.provide("serverUrl", main)
   project.provide("targetUrl", target)
 }

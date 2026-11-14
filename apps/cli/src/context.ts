@@ -13,6 +13,9 @@ export interface Io {
   /** Reads all of stdin as text. */
   readStdin(): Promise<string>
   stdinIsTty: boolean
+  /** Whether stdout is a terminal, and how wide: `jot show` draws images only there. */
+  stdoutIsTty?: boolean
+  columns?: number
   env: Record<string, string | undefined>
   cwd: string
 }

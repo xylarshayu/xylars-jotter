@@ -164,6 +164,13 @@ function build(io: Io, session: Session, ctxs: Context[]): Command {
     )
 
   program
+    .command("show <id>")
+    .description(
+      "show a note with its images, drawn in the terminal (Ghostty, kitty, WezTerm, iTerm2)",
+    )
+    .action(async (id: string) => cmd.show(await open(), id))
+
+  program
     .command("edit <id> [text...]")
     .description("replace a note's text (keeps the old version in history)")
     .action(async (id: string, words: string[]) =>
@@ -347,6 +354,8 @@ if (
       return Buffer.concat(chunks).toString("utf8")
     },
     stdinIsTty: Boolean(process.stdin.isTTY),
+    stdoutIsTty: Boolean(process.stdout.isTTY),
+    columns: process.stdout.columns,
     env: process.env,
     cwd: process.cwd(),
   }
