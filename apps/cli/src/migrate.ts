@@ -2,11 +2,12 @@
  * `jot migrate`: copies a whole store (e.g. the local server) into a fresh deployment, as
  * ciphertext, and rotates the open key on the way (ADR-0015).
  *
- * Kept as-is: note bodies, previews, history, attachments, ids, timestamps, sync sequence,
- * import source hashes, locked channels' passphrase-wrapped keys.
+ * Kept as-is: note bodies, history, attachments, ids, timestamps, sync sequence, import source
+ * hashes, locked channels' passphrase-wrapped keys, and their notes' previews.
  * Changed: open channels' keys are re-wrapped to the new open key, and channel names are
  * re-sealed to their channel and the new open key (ADR-0014). A locked channel whose name the
- * old open key can't read keeps its name as-is until it is next unlocked in the app.
+ * old open key can't read keeps its name as-is until it is next unlocked in the app. In open
+ * channels, link previews with an oversized image are re-sealed with the image shrunk (ADR-0020).
  *
  * The rotation happens here, before upload, so nothing wrapped to the old key reaches the
  * new server. Prints counts only; never keys, names or note content.
@@ -19,9 +20,14 @@ import {
   type ChannelRow,
   type DumpRow,
   type DumpTable,
+  fitPreviewImage,
   isOpenChannel,
+  MAX_PREVIEW_IMAGE,
+  type NoteRow,
+  openPreview,
   openText,
   sealChannelName,
+  sealPreview,
 } from "@jot/core"
 import {
   type AgeIdentity,
@@ -34,9 +40,35 @@ import {
   wrapForRecipient,
 } from "@jot/crypto"
 import { accessHeaders, CliError, type Io, loadConfig, readOpenKey } from "./context.ts"
+import { shrinkPreviewImage } from "./images.ts"
 
 const PAGE = 100
 const CONCURRENCY = 4
+/**
+ * Restore requests stay small: on the Workers free plan a request gets 10 ms of CPU, and the
+ * Worker parses and checks every ciphertext it is sent.
+ */
+const RESTORE_BYTES = 96 * 1024
+const RESTORE_ROWS = 25
+
+/** Splits rows into runs of at most RESTORE_ROWS rows and about RESTORE_BYTES of JSON. */
+export function restoreChunks<T>(rows: T[]): T[][] {
+  const out: T[][] = []
+  let chunk: T[] = []
+  let bytes = 0
+  for (const row of rows) {
+    const size = JSON.stringify(row).length
+    if (chunk.length && (chunk.length >= RESTORE_ROWS || bytes + size > RESTORE_BYTES)) {
+      out.push(chunk)
+      chunk = []
+      bytes = 0
+    }
+    chunk.push(row)
+    bytes += size
+  }
+  if (chunk.length) out.push(chunk)
+  return out
+}
 
 async function* pages<T extends DumpTable>(api: Api, table: T): AsyncGenerator<DumpRow<T>[]> {
   let after = 0
@@ -57,6 +89,26 @@ export interface MigrateCounts {
   versions: number
   attachments: number
   missingAttachments: number
+  previewsShrunk: number
+}
+
+/**
+ * Re-seals a note's link previews if one has an image over MAX_PREVIEW_IMAGE, with that image
+ * shrunk (or dropped if it can't be). Only open channels: `identity` is the channel's key.
+ */
+async function fitPreviews<T extends NoteRow>(
+  row: T,
+  identity: AgeIdentity | undefined,
+  recipient: AgeRecipient,
+  counts: MigrateCounts,
+): Promise<T> {
+  // The ciphertext is longer than any image inside it, so short previews are skipped unopened.
+  if (!identity || !row.preview || row.preview.length <= MAX_PREVIEW_IMAGE) return row
+  const body = await openPreview(identity, row.preview)
+  const items = await Promise.all(body.items.map((i) => fitPreviewImage(i, shrinkPreviewImage)))
+  if (items.every((item, i) => item.image === body.items[i]!.image)) return row
+  counts.previewsShrunk++
+  return { ...row, preview: await sealPreview(recipient, { v: 1, items }) }
 }
 
 /** Re-wraps an open channel's key and re-seals its name for the new open key. */
@@ -65,6 +117,7 @@ async function rotateChannel(
   oldKey: AgeIdentity,
   newRecipient: AgeRecipient,
   counts: MigrateCounts,
+  identities: Map<string, AgeIdentity>,
 ): Promise<ChannelRow> {
   if (isOpenChannel(row)) {
     let identity: AgeIdentity
@@ -78,6 +131,7 @@ async function rotateChannel(
     if ((await recipientOf(identity)) !== row.recipient)
       throw new CliError(`open channel ${row.id} has a mismatched key; nothing finished`)
     const name = await openText(identity, row.name)
+    identities.set(row.id, identity)
     counts.openRewrapped++
     return {
       ...row,
@@ -131,14 +185,18 @@ export async function migrate(
     versions: 0,
     attachments: 0,
     missingAttachments: 0,
+    previewsShrunk: 0,
   }
   const progress = (what: string) => io.err(`migrate: ${what}`)
 
   // Channels first, all of them, so a bad open channel stops the run before any note moves.
   const channels: ChannelRow[] = []
+  const identities = new Map<string, AgeIdentity>() // open channels' keys, for their previews
   for await (const rows of pages(source, "channels")) {
-    for (const row of rows) channels.push(await rotateChannel(row, oldKey, newRecipient, counts))
+    for (const row of rows)
+      channels.push(await rotateChannel(row, oldKey, newRecipient, counts, identities))
   }
+  const recipients = new Map(channels.map((c) => [c.id, c.recipient]))
   counts.channels = channels.length
   // Check the result before uploading: every open channel must open with the new key.
   for (const row of channels) {
@@ -148,17 +206,28 @@ export async function migrate(
       throw new CliError("re-wrapped key check failed; nothing finished")
   }
   if (!opts.dryRun)
-    for (let i = 0; i < channels.length; i += PAGE)
-      await target.restore({ channels: channels.slice(i, i + PAGE) })
+    for (const chunk of restoreChunks(channels)) await target.restore({ channels: chunk })
   progress(`${counts.channels} channels`)
 
-  for await (const rows of pages(source, "notes")) {
-    if (!opts.dryRun) await target.restore({ notes: rows })
+  for await (const page of pages(source, "notes")) {
+    const rows = []
+    for (const row of page)
+      rows.push(
+        await fitPreviews(
+          row,
+          identities.get(row.channelId),
+          recipients.get(row.channelId)!,
+          counts,
+        ),
+      )
+    if (!opts.dryRun)
+      for (const chunk of restoreChunks(rows)) await target.restore({ notes: chunk })
     counts.notes += rows.length
   }
-  progress(`${counts.notes} notes`)
+  progress(`${counts.notes} notes (${counts.previewsShrunk} link previews shrunk)`)
   for await (const rows of pages(source, "versions")) {
-    if (!opts.dryRun) await target.restore({ versions: rows })
+    if (!opts.dryRun)
+      for (const chunk of restoreChunks(rows)) await target.restore({ versions: chunk })
     counts.versions += rows.length
   }
   progress(`${counts.versions} earlier versions`)
@@ -203,7 +272,8 @@ export async function migrate(
   io.out(
     `${opts.dryRun ? "dry run: would migrate" : "migrated"} ${c.channels} channels ` +
       `(${c.openRewrapped} open re-wrapped to the new key), ${c.notes} notes, ` +
-      `${c.versions} earlier versions, ${c.attachments} attachments`,
+      `${c.versions} earlier versions, ${c.attachments} attachments; ` +
+      `${c.previewsShrunk} link previews with a large image re-sealed with it shrunk`,
   )
   if (c.lockedNamesShared + c.lockedNamesPending)
     io.out(

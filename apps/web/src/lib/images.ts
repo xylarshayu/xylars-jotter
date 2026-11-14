@@ -3,7 +3,12 @@
  * stripped of metadata (EXIF, including GPS). GIFs (so they stay animated),
  * SVGs, formats the browser can't decode and every other file type are kept
  * byte for byte (ADR-0017).
+ *
+ * Link preview images that are too big are shrunk to thumbnails (ADR-0020).
  */
+import { type ImageShrinker, parseImageDataUrl, PREVIEW_IMAGE_STEPS } from "@jot/core"
+import { fromBase64, toBase64 } from "@jot/crypto"
+
 export interface PreparedFile {
   data: Uint8Array
   mime: string
@@ -69,5 +74,41 @@ export async function prepareFile(file: File): Promise<PreparedFile> {
     }
   } catch {
     return original(file)
+  }
+}
+
+const encode = (canvas: HTMLCanvasElement, mime: string, quality: number) =>
+  new Promise<Blob | null>((res) => canvas.toBlob(res, mime, quality))
+
+/** WebP where the browser can encode it; Safari can't, so it gets JPEG on white instead. */
+export const shrinkPreviewImage: ImageShrinker = async (dataUrl, maxLength) => {
+  const parsed = parseImageDataUrl(dataUrl)
+  if (!parsed) return undefined
+  const source = new Blob([fromBase64(parsed.base64) as Uint8Array<ArrayBuffer>], {
+    type: parsed.mime,
+  })
+  const bmp = await createImageBitmap(source)
+  try {
+    for (const { side, quality } of PREVIEW_IMAGE_STEPS) {
+      const scale = Math.min(1, side / Math.min(bmp.width, bmp.height))
+      const canvas = document.createElement("canvas")
+      canvas.width = Math.max(1, Math.round(bmp.width * scale))
+      canvas.height = Math.max(1, Math.round(bmp.height * scale))
+      const ctx = canvas.getContext("2d")!
+      ctx.drawImage(bmp, 0, 0, canvas.width, canvas.height)
+      let blob = await encode(canvas, "image/webp", quality)
+      if (blob?.type !== "image/webp") {
+        ctx.globalCompositeOperation = "destination-over"
+        ctx.fillStyle = "#fff"
+        ctx.fillRect(0, 0, canvas.width, canvas.height)
+        blob = await encode(canvas, "image/jpeg", quality)
+      }
+      if (!blob) return undefined
+      const url = `data:${blob.type};base64,${toBase64(new Uint8Array(await blob.arrayBuffer()))}`
+      if (url.length <= maxLength) return url
+    }
+    return undefined
+  } finally {
+    bmp.close()
   }
 }

@@ -5,12 +5,17 @@ import {
   Api,
   ApiError,
   approvePairing,
+  type ChannelRow,
+  type DumpRow,
+  type DumpTable,
   checkPairing,
   LockedError,
   MAX_ATTACHMENT_BYTES,
   MAX_ATTACHMENT_PLAIN_BYTES,
+  MAX_NOTE_BYTES,
   MAX_PENDING_PAIRINGS,
   Notebook,
+  type NoteRow,
   newChannel,
   newId,
   PairingError,
@@ -134,6 +139,24 @@ describe("ciphertext checks", () => {
     expect(res.status).toBe(422)
     expect(await res.json()).toEqual({ error: "body_not_pq_age" })
   })
+
+  it("rejects malformed base64, and oversized bodies before decoding them", async () => {
+    const { nb } = await notebook()
+    const ch = await nb.createChannel({ name: "Inbox", lock: "open" })
+    const post = (body: string) =>
+      raw("/api/notes", {
+        method: "POST",
+        body: JSON.stringify({ id: newId(), channelId: ch.id, body }),
+      })
+
+    const bad = await post("not base64!")
+    expect(bad.status).toBe(422)
+    expect(await bad.json()).toEqual({ error: "invalid_base64" })
+
+    const huge = await post("A".repeat(Math.ceil(MAX_NOTE_BYTES / 3) * 4 + 4))
+    expect(huge.status).toBe(413)
+    expect(await huge.json()).toEqual({ error: "body_too_large" })
+  })
 })
 
 describe("notes", () => {
@@ -196,6 +219,28 @@ describe("notes", () => {
     }
     expect(pages).toBeGreaterThanOrEqual(3) // storage is shared across tests in this file
     expect(await reader.notes(ch.id)).toHaveLength(7)
+  })
+
+  it("ends a page at about 1 MB of ciphertext, never skipping or repeating a note", async () => {
+    const { nb, open } = await notebook()
+    const ch = await nb.createChannel({ name: "Inbox", lock: "open" })
+    const big = "synthetic ".repeat(20_000) // 200 KB of text per note
+    for (let i = 0; i < 8; i++) await nb.addNote(ch.id, `${i} ${big}`)
+    const reader = new Notebook({ api: api() })
+    await reader.keys.setOpenKey(open.identity)
+    const seen: string[] = []
+    for (;;) {
+      const page = await reader.api.sync(reader.replica.cursor, 1000)
+      const bytes = page.notes.reduce((n, r) => n + r.body.length * 0.75, 0)
+      expect(bytes).toBeLessThan(1024 * 1024 + 256 * 1024) // the budget plus at most one note
+      seen.push(...page.notes.filter((r) => r.channelId === ch.id).map((r) => r.id))
+      reader.replica.apply(page)
+      reader.replica.cursor = page.cursor
+      if (!page.more) break
+    }
+    expect(new Set(seen).size).toBe(8)
+    expect(seen).toHaveLength(8)
+    expect(await reader.notes(ch.id)).toHaveLength(8)
   })
 
   it("searches text and link previews, newest first", async () => {
@@ -440,6 +485,26 @@ describe("locked channel names (ADR-0014)", () => {
 describe("store copy: dump and restore (ADR-0015)", () => {
   const post = (path: string, body: unknown) =>
     raw(path, { method: "POST", body: JSON.stringify(body) })
+  // Pages end at about 1 MB, and earlier tests store large notes: read everything.
+  async function dumpAll<T extends DumpTable>(a: Api, table: T) {
+    const rows: DumpRow<T>[] = []
+    for (let after = 0; ;) {
+      const page = await a.dump(table, after, 500)
+      rows.push(...page.rows)
+      if (page.next === null) return rows
+      after = page.next
+    }
+  }
+  async function syncAll(a: Api) {
+    const out = { channels: [] as ChannelRow[], notes: [] as NoteRow[], cursor: 0 }
+    for (;;) {
+      const page = await a.sync(out.cursor, 1000)
+      out.channels.push(...page.channels)
+      out.notes.push(...page.notes)
+      out.cursor = page.cursor
+      if (!page.more) return out
+    }
+  }
 
   it("dumps every table in pages, including source hashes and history", async () => {
     const { nb } = await notebook()
@@ -467,11 +532,11 @@ describe("store copy: dump and restore (ADR-0015)", () => {
     // Copy everything out, then empty the account as if it were a fresh deployment.
     const a = api()
     const dump = {
-      channels: (await a.dump("channels", 0, 500)).rows,
-      notes: (await a.dump("notes", 0, 500)).rows,
-      versions: (await a.dump("versions", 0, 500)).rows,
+      channels: await dumpAll(a, "channels"),
+      notes: await dumpAll(a, "notes"),
+      versions: await dumpAll(a, "versions"),
     }
-    const before = await a.sync(0, 1000)
+    const before = await syncAll(a)
     await env.DB.batch(
       ["users", "channels", "notes", "note_versions", "attachments"].map((t) =>
         env.DB.prepare(`DELETE FROM ${t}`),
@@ -499,12 +564,12 @@ describe("store copy: dump and restore (ADR-0015)", () => {
     expect((await post("/api/restore", {})).status).toBe(409)
     expect((await post("/api/restore/finish", {})).status).toBe(409)
 
-    const after = await a.sync(0, 1000)
+    const after = await syncAll(a)
     expect(after.cursor).toBe(before.cursor)
     expect(after.notes).toEqual(before.notes)
     expect(after.channels).toEqual(before.channels)
-    expect((await a.dump("notes", 0, 500)).rows).toEqual(dump.notes)
-    expect((await a.dump("versions", 0, 500)).rows.length).toBe(dump.versions.length)
+    expect(await dumpAll(a, "notes")).toEqual(dump.notes)
+    expect((await dumpAll(a, "versions")).length).toBe(dump.versions.length)
   })
 })
 

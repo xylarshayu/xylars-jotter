@@ -8,4 +8,6 @@ await build({
   target: "node24",
   banner: { js: "#!/usr/bin/env node" },
   legalComments: "none",
+  // Native image library, loaded from node_modules when a preview image needs shrinking.
+  external: ["sharp"],
 })

@@ -27,18 +27,3 @@ export function isPassphraseAgeFile(bytes: Uint8Array): boolean {
   const t = stanzaTypes(bytes)
   return t !== null && t.length === 1 && t[0] === "scrypt"
 }
-
-export function b64decode(s: string): Uint8Array {
-  const bin = atob(s)
-  const out = new Uint8Array(bin.length)
-  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i)
-  return out
-}
-
-export function b64encode(bytes: Uint8Array | ArrayBuffer | null): string {
-  if (bytes === null) return ""
-  const u = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)
-  let s = ""
-  for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode(...u.subarray(i, i + 0x8000))
-  return btoa(s)
-}

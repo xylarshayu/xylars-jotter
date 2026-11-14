@@ -20,9 +20,9 @@ import {
   TEMPORARY_IDLE_MS,
   TEMPORARY_MAX_MS,
 } from "@jot/core/model"
-import { b64decode, b64encode, stanzaTypes } from "./age.ts"
+import { stanzaTypes } from "./age.ts"
 import type { AppEnv } from "./env.ts"
-import { type C, HttpError, parse, randomB64url, sha256 } from "./http.ts"
+import { b64decode, b64encode, type C, HttpError, parse, randomB64url, sha256 } from "./http.ts"
 
 const TOKEN_RE = /^Bearer (jotd_[A-Za-z0-9_-]{43})$/
 /** Revoked and expired sessions are kept this long, so the device learns why it was signed out. */

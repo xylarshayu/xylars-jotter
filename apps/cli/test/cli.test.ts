@@ -11,8 +11,12 @@ import { execFileSync } from "node:child_process"
 import { homedir, tmpdir } from "node:os"
 import { join } from "node:path"
 import { beforeAll, beforeEach, describe, expect, inject, it, vi } from "vitest"
-import { Api, newChannel } from "@jot/core"
+import sharp from "sharp"
+import { Api, fitPreviewImage, MAX_PREVIEW_IMAGE, newChannel, Notebook } from "@jot/core"
+import { parseIdentity } from "@jot/crypto"
+import { shrinkPreviewImage } from "../src/images.ts"
 import { run } from "../src/main.ts"
+import { restoreChunks } from "../src/migrate.ts"
 import type { Io } from "../src/context.ts"
 
 // Synthetic data only.
@@ -55,15 +59,47 @@ async function ok(args: string[], stdin = "") {
 
 let vault = ""
 
+/** A synthetic noise PNG, which barely compresses: about 180 KB at 300x200. */
+async function noisePng(width = 300, height = 200): Promise<string> {
+  const png = await sharp({
+    create: {
+      width,
+      height,
+      channels: 3,
+      background: "#808080",
+      noise: { type: "gaussian", mean: 128, sigma: 60 },
+    },
+  })
+    .png()
+    .toBuffer()
+  return `data:image/png;base64,${png.toString("base64")}`
+}
+let bigImage = ""
+
+/** The core notebook, for checks the CLI's output leaves out (preview images). */
+async function reader(server: string, key: string): Promise<Notebook> {
+  const nb = new Notebook({ api: new Api({ baseUrl: server }) })
+  await nb.keys.setOpenKey(parseIdentity(readFileSync(key, "utf8")))
+  await nb.sync()
+  return nb
+}
+
 // The Worker's unfurl endpoint refuses local addresses, so previews are stubbed with synthetic
-// data. A URL containing "bare" unfurls to nothing (no title or description).
+// data. A URL containing "bare" unfurls to nothing (no title or description); one containing
+// "big" comes with an image over MAX_PREVIEW_IMAGE.
 const unfurled: string[] = []
-beforeAll(() => {
+beforeAll(async () => {
+  bigImage = await noisePng()
   vi.spyOn(Api.prototype, "unfurl").mockImplementation(async (url: string) => {
     unfurled.push(url)
     if (url.includes("bare")) return { url }
     const path = new URL(url).pathname.slice(1)
-    return { url, title: `Synthetic title ${path}`, description: `synthetic description ${path}` }
+    return {
+      url,
+      title: `Synthetic title ${path}`,
+      description: `synthetic description ${path}`,
+      ...(url.includes("big") ? { image: bigImage } : {}),
+    }
   })
 })
 beforeEach(() => {
@@ -306,13 +342,13 @@ describe("jot", () => {
       (p) => p && existsSync(p),
     )
     if (!age) return
-    const lockedNote = execFileSync(
+    const lockedNotes = execFileSync(
       "find",
       [join(out, "locked", vault), "-name", "*.age", "-path", "*/20*"],
       { encoding: "utf8" },
     )
       .trim()
-      .split("\n")[0]!
+      .split("\n")
     // Unwrap the channel key with the passphrase (batchpass plugin), then decrypt the note.
     const bin = age.slice(0, age.lastIndexOf("/"))
     const env = { ...process.env, PATH: `${bin}:${process.env.PATH}`, AGE_PASSPHRASE: PASS }
@@ -322,10 +358,14 @@ describe("jot", () => {
       { env },
     )
     writeFileSync(join(home, "vault-id.txt"), identity, { mode: 0o600 })
-    const note = execFileSync(age, ["-d", "-i", join(home, "vault-id.txt"), lockedNote], {
-      encoding: "utf8",
-    })
-    expect(JSON.parse(note).text).toMatch(/synthetic|sealed/)
+    // Directory order varies by filesystem, and file-only notes have empty text: check them all.
+    const texts = lockedNotes.map(
+      (f) =>
+        JSON.parse(
+          execFileSync(age, ["-d", "-i", join(home, "vault-id.txt"), f], { encoding: "utf8" }),
+        ).text as string,
+    )
+    expect(texts.some((t) => /synthetic|sealed/.test(t))).toBe(true)
   })
 
   describe("link previews", () => {
@@ -411,6 +451,36 @@ describe("jot", () => {
       expect((await jot(["previews", "-n", "0"])).code).toBe(1)
     })
 
+    it("shrinks a large preview image to a WebP thumbnail (ADR-0020)", async () => {
+      expect(bigImage.length).toBeGreaterThan(MAX_PREVIEW_IMAGE)
+      const small = await shrinkPreviewImage(bigImage, MAX_PREVIEW_IMAGE)
+      expect(small).toMatch(/^data:image\/webp;base64,/)
+      expect(small!.length).toBeLessThanOrEqual(MAX_PREVIEW_IMAGE)
+      const out = await sharp(Buffer.from(small!.split(",")[1]!, "base64")).metadata()
+      expect(Math.min(out.width, out.height)).toBeLessThanOrEqual(256)
+      expect(out.width / out.height).toBeCloseTo(300 / 200, 1)
+
+      // An image that fits is kept byte for byte; one that can't be decoded is dropped.
+      const tiny = await noisePng(16, 16)
+      expect(
+        (await fitPreviewImage({ url: "https://example.com/", image: tiny }, shrinkPreviewImage))
+          .image,
+      ).toBe(tiny)
+      const broken = `data:image/png;base64,${"A".repeat(MAX_PREVIEW_IMAGE)}`
+      expect(
+        await fitPreviewImage({ url: "https://example.com/", image: broken }, shrinkPreviewImage),
+      ).toEqual({
+        url: "https://example.com/",
+      })
+
+      // Notes get the shrunk image when their previews are fetched.
+      const id = (await ok(["add", "-c", "Links", "synthetic https://example.com/big"])).trim()
+      const nb = await reader(inject("serverUrl"), keyFile)
+      const image = (await nb.noteView(nb.replica.notes.get(id)!))!.previews[0]!.image!
+      expect(image).toMatch(/^data:image\/webp;base64,/)
+      expect(image.length).toBeLessThanOrEqual(MAX_PREVIEW_IMAGE)
+    })
+
     it("locked channels need -c, --locked and an unlock", async () => {
       const without = await jot(["previews", "-c", vault])
       expect(without.code).toBe(1)
@@ -430,6 +500,16 @@ describe("jot", () => {
   })
 
   describe("migrate (ADR-0015)", () => {
+    it("splits restore uploads small enough for the free plan's CPU limit", () => {
+      const small = Array.from({ length: 60 }, (_, i) => ({ id: i }))
+      expect(restoreChunks(small).map((c) => c.length)).toEqual([25, 25, 10])
+      const big = Array.from({ length: 5 }, () => ({ body: "x".repeat(40 * 1024) }))
+      expect(restoreChunks(big).map((c) => c.length)).toEqual([2, 2, 1])
+      const huge = [{ body: "x".repeat(200 * 1024) }, { id: 1 }]
+      expect(restoreChunks(huge).map((c) => c.length)).toEqual([1, 1])
+      expect(restoreChunks([])).toEqual([])
+    })
+
     const target = () => inject("targetUrl")
     const newKey = join(home, "new-open-key.txt")
     const dir = join(home, "previews")
@@ -442,6 +522,7 @@ describe("jot", () => {
         onTarget(),
       )
     let legacy = ""
+    let oversized = ""
 
     beforeAll(async () => {
       // A locked channel from before ADR-0014: its name is sealed to the channel only.
@@ -453,6 +534,14 @@ describe("jot", () => {
       })
       legacy = (await new Api({ baseUrl: inject("serverUrl") }).createChannel(request)).id
       await ok(["add", "-c", legacy, "synthetic legacy note"])
+      // A preview stored before ADR-0020, with its image as fetched (no shrinker here).
+      const nb = await reader(inject("serverUrl"), keyFile)
+      const inbox = (await nb.findChannel("Inbox"))!
+      oversized = (await nb.addNote(inbox.id, "synthetic oversized preview")).id
+      await nb.setPreviews(oversized, [
+        { url: "https://example.com/old", title: "Synthetic old", image: bigImage },
+      ])
+      await nb.flush()
       expect((await jot(["keygen", "-o", newKey])).code).toBe(0)
     })
 
@@ -476,6 +565,7 @@ describe("jot", () => {
       expect(r.code, r.err).toBe(0)
       expect(r.out).toMatch(/^migrated \d+ channels \(\d+ open re-wrapped to the new key\)/)
       expect(r.out).toContain("locked channel names: 1 re-sealed to the new key, 1 still hidden")
+      expect(r.out).toContain("1 link previews with a large image re-sealed with it shrunk")
       // Counts only: no names, note text or key material.
       for (const secret of ["Inbox", "Vault", "synthetic", "AGE-SECRET-KEY"])
         expect(r.out + r.err).not.toContain(secret)
@@ -491,6 +581,12 @@ describe("jot", () => {
       expect(copied.some((n) => n.previews.length > 0)).toBe(true)
       const hits = JSON.parse(await t(["search", "--json", "title alpha"])) as Listed[]
       expect(hits.map((h) => h.text)).toEqual(["preview synthetic 1"])
+      // The oversized preview image arrived shrunk; its title is unchanged.
+      const nb = await reader(target(), newKey)
+      const [p] = (await nb.noteView(nb.replica.notes.get(oversized)!))!.previews
+      expect(p!.title).toBe("Synthetic old")
+      expect(p!.image).toMatch(/^data:image\/webp;base64,/)
+      expect(p!.image!.length).toBeLessThanOrEqual(MAX_PREVIEW_IMAGE)
 
       // Locked channels keep their passphrase; the shared name moved to the new key.
       const names = (key: string) =>

@@ -5,8 +5,10 @@ import {
   ApiError,
   ChannelRow,
   extractLinks,
+  fitPreviewImage,
   isOpenChannel,
   KeyRing,
+  MAX_PREVIEW_IMAGE,
   newChannel,
   MemoryOutbox,
   Notebook,
@@ -18,6 +20,7 @@ import {
   pairingLink,
   parseImportLine,
   parsePairingLink,
+  parseImageDataUrl,
   Replica,
   search,
   slugify,
@@ -252,5 +255,44 @@ describe("pairing links and codes", () => {
     expect(await pairingCode("AAAAAAAAAAAAAAAAAAAAAA", a.recipient)).toBe(code)
     expect(await pairingCode("AAAAAAAAAAAAAAAAAAAAAA", b.recipient)).not.toBe(code)
     expect(await pairingCode("BAAAAAAAAAAAAAAAAAAAAA", a.recipient)).not.toBe(code)
+  })
+})
+
+describe("preview images (ADR-0020)", () => {
+  const item = (chars: number) => ({
+    url: "https://example.com/",
+    title: "Synthetic",
+    image: `data:image/png;base64,${"A".repeat(chars)}`,
+  })
+  const small = "data:image/webp;base64,AAAA"
+
+  it("keeps an image that fits, byte for byte, without re-encoding it", async () => {
+    const fits = item(1000)
+    let calls = 0
+    const out = await fitPreviewImage(fits, async () => (calls++, small))
+    expect(out).toEqual(fits)
+    expect(calls).toBe(0)
+  })
+
+  it("re-encodes a large image, and drops it if that fails or doesn't fit", async () => {
+    const big = item(MAX_PREVIEW_IMAGE)
+    expect((await fitPreviewImage(big, async () => small)).image).toBe(small)
+    for (const shrink of [
+      undefined,
+      async () => undefined,
+      async () => big.image,
+      async () => {
+        throw new Error("synthetic decode failure")
+      },
+    ]) {
+      const out = await fitPreviewImage(big, shrink)
+      expect(out).toEqual({ url: big.url, title: big.title })
+    }
+  })
+
+  it("parses base64 image data URLs only", () => {
+    expect(parseImageDataUrl(small)).toEqual({ mime: "image/webp", base64: "AAAA" })
+    expect(parseImageDataUrl("data:text/html;base64,AAAA")).toBeUndefined()
+    expect(parseImageDataUrl("https://example.com/a.png")).toBeUndefined()
   })
 })

@@ -1,6 +1,7 @@
 # ADR-0015: Moving to a new server copies the store as ciphertext and rotates the open key
 
-Status: accepted (2026-11-14)
+Status: accepted (2026-11-14). Amended by [ADR-0020](0020-small-preview-images.md): link
+previews in open channels with an oversized image are re-sealed with the image shrunk.
 
 ## Context
 

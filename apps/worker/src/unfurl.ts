@@ -5,8 +5,11 @@
  * - No IP-literal hosts at all, and no local/internal names.
  * - Redirects followed manually (max 3), each hop re-checked.
  * - Time limit and size limits; HTML and raster images only.
- * - Nothing is logged or stored. The client encrypts the result.
+ * - Nothing is logged or stored. The client shrinks a large image (ADR-0020) and encrypts the
+ *   result.
  */
+import { b64encode } from "./http.ts"
+
 export class UnfurlError extends Error {
   constructor(readonly code: string) {
     super(code)
@@ -190,10 +193,7 @@ async function fetchImage(src: string, signal: AbortSignal): Promise<string | un
     }
     const bytes = await readLimited(res, MAX_IMAGE + 1, false)
     if (bytes.length > MAX_IMAGE) return undefined
-    let s = ""
-    for (let i = 0; i < bytes.length; i += 0x8000)
-      s += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
-    return `data:${type};base64,${btoa(s)}`
+    return `data:${type};base64,${b64encode(bytes)}`
   } catch {
     return undefined
   }

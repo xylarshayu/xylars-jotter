@@ -16,7 +16,9 @@ export function normalizeLock(value: unknown): LockKind {
 }
 
 const id = z.string().regex(/^[0-9A-HJKMNP-TV-Z]{26}$/, "expected a ULID")
-const b64 = z.string().regex(/^[A-Za-z0-9+/]*={0,2}$/, "expected base64")
+// Checked where it is decoded (the Worker answers 422 invalid_base64), not by a regex over every
+// byte of a large payload.
+const b64 = z.string()
 const recipient = z
   .string()
   .regex(/^age1pq1[02-9ac-hj-np-z]+$/, "expected a hybrid age1pq1 recipient")

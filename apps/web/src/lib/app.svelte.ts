@@ -31,7 +31,7 @@ import {
 import { CryptoError, generateKeyPair, isHybridIdentity, parseIdentity } from "@jot/crypto"
 import { startAutoLock } from "./autolock.ts"
 import { Db, IdbOutbox, Persist } from "./db.ts"
-import { prepareFile } from "./images.ts"
+import { prepareFile, shrinkPreviewImage } from "./images.ts"
 import { download, releaseAll, releaseUnreadable } from "./media.ts"
 import { applyTheme, loadSettings, saveSettings, type Settings } from "./settings.ts"
 
@@ -200,6 +200,7 @@ class App {
         replica: Replica.from(snapshot),
         outbox: new IdbOutbox(this.#db),
         onChange: () => this.#changed(),
+        shrinkImage: shrinkPreviewImage,
       })
       this.nb.keys.onChange(() => this.#keysChanged())
       await this.nb.restorePending()
@@ -350,6 +351,7 @@ class App {
       api: this.#api({ "x-jot-no-store": "1" }),
       replica: Replica.from(undefined),
       onChange: () => this.#changed(),
+      shrinkImage: shrinkPreviewImage,
     })
     this.nb.keys.onChange(() => this.#keysChanged())
     this.#db.close()

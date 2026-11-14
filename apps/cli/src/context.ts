@@ -5,6 +5,7 @@ import { homedir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { Api, Notebook, Replica, type PlainEntry, type ReplicaSnapshot } from "@jot/core"
 import { parseIdentity } from "@jot/crypto"
+import { shrinkPreviewImage } from "./images.ts"
 
 export interface Io {
   out(s: string): void
@@ -108,7 +109,11 @@ export class Context {
     } catch {
       snapshot = undefined
     }
-    this.nb = new Notebook({ api, replica: Replica.from(snapshot) })
+    this.nb = new Notebook({
+      api,
+      replica: Replica.from(snapshot),
+      shrinkImage: shrinkPreviewImage,
+    })
   }
 
   static async create(io: Io, opts: { requireOpenKey?: boolean } = {}): Promise<Context> {

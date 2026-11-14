@@ -16,9 +16,9 @@ import {
   type ChannelRow,
   type NoteRow,
 } from "@jot/core/model"
-import { b64decode, b64encode, isHybridAgeFile, isPassphraseAgeFile } from "./age.ts"
+import { isHybridAgeFile, isPassphraseAgeFile } from "./age.ts"
 import type { AppEnv } from "./env.ts"
-import { type C, HttpError, parse } from "./http.ts"
+import { b64decode, b64encode, type C, HttpError, parse } from "./http.ts"
 import { unfurl, UnfurlError } from "./unfurl.ts"
 
 const ID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/
@@ -79,6 +79,8 @@ const NOTE_COLS =
   "id, channel_id, version, body, preview, size, created_at, updated_at, deleted_at, seq"
 
 function hybridBlob(b64: string, max: number, what: string): Uint8Array {
+  // Refuse oversized payloads before decoding them: 4 characters carry 3 bytes.
+  if (b64.length > Math.ceil(max / 3) * 4) throw new HttpError(413, `${what}_too_large`)
   const bytes = b64decode(b64)
   if (bytes.length > max) throw new HttpError(413, `${what}_too_large`)
   if (!isHybridAgeFile(bytes)) throw new HttpError(422, `${what}_not_pq_age`)
@@ -143,6 +145,32 @@ accessOnly.get("/login", (c) => c.redirect("/", 302))
 
 /* ------------------------------- sync ------------------------------- */
 
+/**
+ * Pages end at a row count or once about PAGE_BYTES of ciphertext is in (always at least one
+ * row), whichever comes first. A page of notes with big previews would otherwise cost more CPU
+ * to encode than a request gets on the free plan.
+ */
+const PAGE_BYTES = 1024 * 1024
+const NOTE_BYTES = "length(body) + ifnull(length(preview), 0)"
+
+/** A paged row, with the running total of ciphertext bytes up to and including it. */
+type Paged<T> = T & { upto: number }
+
+/**
+ * The next page of `table` after `?2` in `order`, for user `?1`: at most `?3` rows, cut once the
+ * running total of `bytes` reaches PAGE_BYTES. SQLite reads only the row headers to add up the
+ * sizes, and only the selected rows in full. All arguments are constants from this file.
+ */
+function pageSql(cols: string, table: string, order: string, bytes: string): string {
+  return `SELECT ${cols}, p.upto FROM ${table} t JOIN (
+    SELECT k, upto FROM (
+      SELECT k, size, SUM(size) OVER (ORDER BY o) AS upto FROM (
+        SELECT rowid AS k, ${order} AS o, ${bytes} AS size FROM ${table}
+        WHERE user_id = ?1 AND ${order} > ?2 ORDER BY ${order} LIMIT ?3))
+    WHERE upto - size < ${PAGE_BYTES}) p ON t.rowid = p.k
+  ORDER BY t.${order}`
+}
+
 api.get("/sync", async (c) => {
   const since = Math.max(0, Number(c.req.query("since") ?? 0) | 0)
   const limit = Math.min(1000, Math.max(1, Number(c.req.query("limit") ?? 500) | 0))
@@ -153,14 +181,12 @@ api.get("/sync", async (c) => {
     c.env.DB.prepare(
       `SELECT ${CHANNEL_COLS} FROM channels WHERE user_id = ? AND seq > ? ORDER BY seq`,
     ).bind(uid, since),
-    c.env.DB.prepare(
-      `SELECT ${NOTE_COLS} FROM notes WHERE user_id = ? AND seq > ? ORDER BY seq LIMIT ?`,
-    ).bind(uid, since, limit + 1),
+    c.env.DB.prepare(pageSql(NOTE_COLS, "notes", "seq", NOTE_BYTES)).bind(uid, since, limit + 1),
   ])
   const head = (user!.results[0] as { seq: number } | undefined)?.seq ?? 0
-  const noteRows = notes!.results as unknown as NoteDb[]
-  const more = noteRows.length > limit
-  const page = more ? noteRows.slice(0, limit) : noteRows
+  const noteRows = notes!.results as unknown as Paged<NoteDb>[]
+  const page = noteRows.slice(0, limit)
+  const more = noteRows.length > limit || (page.at(-1)?.upto ?? 0) >= PAGE_BYTES
   const cursor = more ? page[page.length - 1]!.seq : Math.max(head, since)
   return c.json({
     channels: (channels!.results as unknown as ChannelDb[])
@@ -488,13 +514,23 @@ api.get("/attachments/:id", async (c) => {
 // The dump is read-only and returns the same ciphertext as sync, plus history, attachment rows
 // and import source hashes. Rows are paged by SQLite rowid.
 const DUMP_SQL: Record<DumpTable, string> = {
-  channels: `SELECT rowid AS r, ${CHANNEL_COLS} FROM channels`,
-  notes: `SELECT rowid AS r, ${NOTE_COLS}, source_hash FROM notes`,
-  versions: "SELECT rowid AS r, note_id, version, channel_id, body, created_at FROM note_versions",
-  attachments: "SELECT rowid AS r, id, channel_id, size, created_at FROM attachments",
+  channels: pageSql(`t.rowid AS r, ${CHANNEL_COLS}`, "channels", "rowid", "length(name)"),
+  notes: pageSql(`t.rowid AS r, ${NOTE_COLS}, source_hash`, "notes", "rowid", NOTE_BYTES),
+  versions: pageSql(
+    "t.rowid AS r, note_id, version, channel_id, body, created_at",
+    "note_versions",
+    "rowid",
+    "length(body)",
+  ),
+  attachments: pageSql(
+    "t.rowid AS r, id, channel_id, size, created_at",
+    "attachments",
+    "rowid",
+    "0",
+  ),
 }
 
-type DumpDb = { r: number } & Record<string, unknown>
+type DumpDb = Paged<{ r: number } & Record<string, unknown>>
 const dumpOut: Record<DumpTable, (r: DumpDb) => unknown> = {
   channels: (r) => channelOut(r as unknown as ChannelDb),
   notes: (r) => ({ ...noteOut(r as unknown as NoteDb), sourceHash: r.source_hash ?? null }),
@@ -518,15 +554,13 @@ accessOnly.get("/dump/:table", async (c) => {
   if (!DUMP_TABLES.includes(table)) throw new HttpError(404, "not_found")
   const after = Math.max(0, Number(c.req.query("after") ?? 0) | 0)
   const limit = Math.min(500, Math.max(1, Number(c.req.query("limit") ?? 200) | 0))
-  const rows = await c.env.DB.prepare(
-    `${DUMP_SQL[table]} WHERE user_id = ? AND rowid > ? ORDER BY rowid LIMIT ?`,
-  )
-    .bind(c.get("userId"), after, limit)
-    .all<DumpDb>()
-  const res = rows.results
+  const res = (
+    await c.env.DB.prepare(DUMP_SQL[table]).bind(c.get("userId"), after, limit).all<DumpDb>()
+  ).results
+  const last = res.at(-1)
   return c.json({
     rows: res.map(dumpOut[table]),
-    next: res.length === limit ? res[res.length - 1]!.r : null,
+    next: last && (res.length === limit || last.upto >= PAGE_BYTES) ? last.r : null,
   })
 })
 

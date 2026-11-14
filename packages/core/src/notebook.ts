@@ -38,6 +38,7 @@ import type {
   UpdateNote,
 } from "./model.ts"
 import { MAX_ATTACHMENT_PLAIN_BYTES } from "./model.ts"
+import { fitPreviewImage, type ImageShrinker } from "./previews.ts"
 import { PENDING_SEQ, Replica } from "./replica.ts"
 import { search } from "./search.ts"
 
@@ -129,6 +130,8 @@ export interface NotebookOptions {
   outbox?: OutboxStore
   /** Called after the replica changes (sync, local writes). */
   onChange?: () => void
+  /** Re-encodes large link preview images (ADR-0020). Without one, they are dropped. */
+  shrinkImage?: ImageShrinker
 }
 
 export interface AddNoteOptions {
@@ -150,6 +153,7 @@ export class Notebook {
   /** "<open recipient>|<name ciphertext>" pairs the open key can't read (not shared yet). */
   #unshared = new Set<string>()
   #onChange: (() => void) | undefined
+  #shrinkImage: ImageShrinker | undefined
   #flushing: Promise<FlushResult> | undefined
 
   constructor(opts: NotebookOptions) {
@@ -158,6 +162,7 @@ export class Notebook {
     this.keys = opts.keys ?? new KeyRing()
     this.outbox = opts.outbox ?? new MemoryOutbox()
     this.#onChange = opts.onChange
+    this.#shrinkImage = opts.shrinkImage
     this.keys.onChange((channelId) => this.#forget(channelId))
   }
 
@@ -641,7 +646,7 @@ export class Notebook {
     const items: PreviewItem[] = []
     for (const url of links.slice(0, 3)) {
       try {
-        const u = await this.api.unfurl(url)
+        const u = await fitPreviewImage(await this.api.unfurl(url), this.#shrinkImage)
         if (u.title || u.description || u.image) items.push(u)
       } catch {
         /* previews are best effort */
