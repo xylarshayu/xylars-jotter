@@ -70,8 +70,9 @@ test("sets up a new key and captures with Enter", async ({ page }) => {
   await composer(page).press("Enter")
   await expect(feed(page).getByText("line two")).toBeVisible()
   // Notes show instantly but upload in the background: the next test's second device only sees
-  // what the server has, so wait until both are uploaded (slow CI runners otherwise race).
-  await expect(page.getByTitle("Waiting to upload")).toHaveCount(0)
+  // what the server has, so wait until both are uploaded (slow CI runners otherwise race). The
+  // link's preview is fetched by the Worker (up to 6 s) and uploaded after it, hence the wait.
+  await expect(page.getByTitle("Waiting to upload")).toHaveCount(0, { timeout: 15_000 })
 
   await page.reload()
   await expect(feed(page).getByText("synthetic first note")).toBeVisible()
