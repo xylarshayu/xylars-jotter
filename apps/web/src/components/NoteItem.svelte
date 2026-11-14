@@ -1,8 +1,9 @@
 <script lang="ts">
   import type { NoteView } from "@jot/core"
-  import { app, channelLabel } from "../lib/app.svelte.ts"
+  import { app, channelLabel, type MenuItem } from "../lib/app.svelte.ts"
   import { fullDate, timeLabel } from "../lib/dates.ts"
   import { linkify } from "../lib/linkify.ts"
+  import { contextMenu } from "../lib/menu.ts"
   import Attachment from "./Attachment.svelte"
   import Icon from "./Icon.svelte"
 
@@ -63,6 +64,33 @@
     return () => clearTimeout(t)
   })
 
+  /** Opens the note's action row at a step, as if chosen from "More". */
+  function openAt(m: typeof mode) {
+    app.selected = note.id
+    mode = m
+  }
+
+  function menu(): MenuItem[] {
+    return [
+      ...(inSearch ? [{ label: "Jump to", icon: "jump", run: () => app.jumpTo(note) }] : []),
+      { label: "Copy", icon: "copy", run: () => void copy() },
+      { label: "Edit", icon: "edit", run: () => app.startEdit(note) },
+      { label: "Move…", icon: "move", run: () => openAt("move") },
+      {
+        label: "History",
+        icon: "history",
+        run: () => {
+          app.selected = note.id
+          void showHistory()
+        },
+      },
+      ...(note.links.length && !note.previews.length
+        ? [{ label: "Fetch preview", icon: "link", run: () => void app.fetchPreview(note) }]
+        : []),
+      { label: "Delete…", icon: "trash", danger: true, run: () => openAt("delete") },
+    ]
+  }
+
   function warning(to: string): string | null {
     const target = app.channel(to)
     if (!target) return null
@@ -85,9 +113,9 @@
   class:selected
   class:pending={note.pending}
   class:marked
-  class:searching={inSearch}
   data-note={note.id}
   bind:this={el}
+  use:contextMenu={menu}
 >
   {#if showChannel && channel}
     <a class="tag" class:locked={channel.lock !== "open"} href="#/c/{note.channelId}">
@@ -123,6 +151,11 @@
   {/each}
 
   <div class="meta">
+    {#if inSearch}
+      <button class="jump" title="Open the channel at this note" onclick={() => app.jumpTo(note)}>
+        <Icon name="jump" size={16} />Jump to
+      </button>
+    {/if}
     {#if note.pending}<span class="clock" title="Waiting to upload"
         ><Icon name="clock" size={14} /></span
       >{/if}
@@ -133,16 +166,6 @@
   </div>
 
   <div class="tools">
-    {#if inSearch}
-      <button
-        class="tool"
-        aria-label="Jump to note"
-        title="Jump to it in its channel"
-        onclick={() => app.jumpTo(note)}
-      >
-        <Icon name="jump" size={19} />
-      </button>
-    {/if}
     <button class="tool" aria-label="Copy note" title="Copy" onclick={copy}>
       <Icon name={copied ? "check" : "copy"} size={19} />
     </button>
@@ -230,8 +253,17 @@
   .note.pending {
     opacity: 0.86;
   }
-  .note.searching {
-    padding-right: 124px;
+  /* A long press opens the note's menu on touch screens, not the browser's callout. */
+  @media (hover: none) {
+    .note {
+      -webkit-touch-callout: none;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    .note .text {
+      -webkit-user-select: none;
+      user-select: none;
+    }
   }
   .note.marked {
     animation: mark 2.5s ease-out;
@@ -330,6 +362,26 @@
     font-size: 0.75rem;
     color: var(--faint);
     font-variant-numeric: tabular-nums;
+  }
+  .jump {
+    margin-right: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    min-height: 32px;
+    padding: 0 10px 0 8px;
+    border: 0;
+    border-radius: 8px;
+    background: color-mix(in srgb, var(--accent) 14%, transparent);
+    color: var(--accent);
+    font: inherit;
+    font-size: 0.84rem;
+    font-weight: 560;
+    cursor: pointer;
+  }
+  .jump:hover,
+  .jump:focus-visible {
+    background: color-mix(in srgb, var(--accent) 24%, transparent);
   }
   .clock {
     display: inline-flex;

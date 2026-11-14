@@ -2,6 +2,7 @@
   import { app } from "./lib/app.svelte.ts"
   import Composer from "./components/Composer.svelte"
   import Feed from "./components/Feed.svelte"
+  import ContextMenu from "./components/ContextMenu.svelte"
   import Lightbox from "./components/Lightbox.svelte"
   import PairDevice from "./components/PairDevice.svelte"
   import PairNew from "./components/PairNew.svelte"
@@ -29,7 +30,8 @@
     if (app.phase !== "ready") return
     const typing = e.target instanceof HTMLElement && e.target.closest("input, textarea, select")
     if (e.key === "Escape") {
-      if (app.lightbox) app.lightbox = null
+      if (app.menu) app.menu = null
+      else if (app.lightbox) app.lightbox = null
       else if (app.selected) app.selected = null
       else if (app.panel) app.panel = null
       else if (app.drawer) app.drawer = false
@@ -86,6 +88,7 @@
   </div>
   <Toasts />
   {#if app.lightbox}<Lightbox />{/if}
+  {#if app.menu}<ContextMenu {...app.menu} />{/if}
 {/if}
 
 <style>

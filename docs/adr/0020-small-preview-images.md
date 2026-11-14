@@ -39,6 +39,20 @@ over every byte.
   and decoding is the validation: malformed input gets 422 `invalid_base64`. The shared `b64`
   schema no longer runs a regex. Oversized payloads are refused from their length before decoding.
 
+## Measured
+
+Per-request CPU from `wrangler tail --format json` (`cpuTime`), on the deployment:
+
+- Before: copying the store failed with `exceededCpu` on single rows, and 1 MB sync pages took 20
+  to 60 ms.
+- After, a full first sync of the whole store: 58 pages, 15.9 MB, 42.5 s. CPU median 2 ms, p90
+  4 ms, max 6 ms; no request over 10 ms and none failed.
+- The first-sync progress count (`/api/sync?count=1`, asked once per sync) is a `count(*)` over
+  the `(user_id, seq)` index, in the same D1 batch as the page.
+
+New endpoints that move ciphertext follow the same rules: read it as hex, bound pages by bytes,
+use the native codecs, and check `cpuTime` with `wrangler tail` against the real data.
+
 ## Consequences
 
 Preview images are thumbnails: a large image can't be viewed at full size from the preview.

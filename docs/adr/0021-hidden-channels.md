@@ -15,8 +15,10 @@ screen lists, not about who can read what.
   and the channel, its notes and agents' access are unchanged.
 - A hidden channel is left out of the sidebar, "All notes", search results and the channel
   pickers (composer and Move). Opening its address directly still works.
-- "Show N hidden channels" at the bottom of the sidebar lists them until the app goes to the
-  background or reloads. Hiding a channel takes effect at once, even while they are shown.
+- An eye button at the foot of the sidebar shows them until the app goes to the background or
+  reloads. It is always there and shows no count, so it gives away neither whether nor how many
+  channels are hidden. Hiding a channel takes effect at once, even while they are shown.
+- Hide and Unhide are in the channel's options and in its menu (right click or long press).
 
 ## Consequences
 

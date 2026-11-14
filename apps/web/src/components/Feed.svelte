@@ -59,7 +59,13 @@
     <div class="empty">
       {#if searching}
         <p>No notes match.</p>
-        <p class="faint">Locked channels are searched only while unlocked.</p>
+        {#if app.searchChannel}
+          <button class="btn ghost" onclick={() => app.setSearchAll(true)}
+            >Search all channels</button
+          >
+        {:else}
+          <p class="faint">Locked channels are searched only while unlocked.</p>
+        {/if}
       {:else if app.channels.length === 0}
         <p>
           {app.online

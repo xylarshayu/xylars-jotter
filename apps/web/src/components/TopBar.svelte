@@ -43,10 +43,32 @@
         bind:value={app.query}
         oninput={() => app.searchSoon()}
         type="search"
-        placeholder="Search notes and link previews"
+        placeholder={app.searchChannel
+          ? `Search ${channelLabel(app.searchChannel)}`
+          : "Search all notes and link previews"}
         aria-label="Search notes"
         enterkeyhint="search"
       />
+      {#if current}
+        <div class="scope" role="group" aria-label="Search in">
+          <button
+            aria-pressed={!app.searchAll}
+            title="Search {channelLabel(current)}"
+            onclick={() => {
+              app.setSearchAll(false)
+              input?.focus()
+            }}>This channel</button
+          >
+          <button
+            aria-pressed={app.searchAll}
+            title="Search every channel"
+            onclick={() => {
+              app.setSearchAll(true)
+              input?.focus()
+            }}>All</button
+          >
+        </div>
+      {/if}
     </div>
     <button class="icon-btn" aria-label="Close search" onclick={() => app.closeSearch()}>
       <Icon name="x" />
@@ -162,6 +184,31 @@
     font: inherit;
     font-size: 1rem;
     color: var(--text);
+  }
+  .scope {
+    display: flex;
+    flex: none;
+    padding: 2px;
+    border-radius: 9px;
+    background: var(--surface-2);
+  }
+  .scope button {
+    min-height: 30px;
+    padding: 0 10px;
+    border: 0;
+    border-radius: 7px;
+    background: none;
+    color: var(--muted);
+    font: inherit;
+    font-size: 0.82rem;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+  .scope button[aria-pressed="true"] {
+    background: var(--surface);
+    color: var(--text);
+    font-weight: 560;
+    box-shadow: var(--shadow);
   }
   .pill {
     display: inline-flex;

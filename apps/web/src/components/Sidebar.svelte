@@ -1,5 +1,7 @@
 <script lang="ts">
-  import { ALL, app, channelLabel } from "../lib/app.svelte.ts"
+  import type { ChannelView } from "@jot/core"
+  import { ALL, app, channelLabel, type MenuItem } from "../lib/app.svelte.ts"
+  import { contextMenu } from "../lib/menu.ts"
   import Icon from "./Icon.svelte"
   import NewChannel from "./NewChannel.svelte"
 
@@ -13,6 +15,24 @@
     { system: "system", light: "sun", dark: "moon" }[app.settings.theme] ?? "system",
   )
   let creating = $state(false)
+
+  function menu(c: ChannelView): () => MenuItem[] {
+    return () => {
+      const isHidden = app.settings.hiddenChannels.includes(c.id)
+      const open = () => app.go({ view: "feed", channel: c.id })
+      return [
+        ...(c.lock === "open"
+          ? []
+          : c.unlocked
+            ? [{ label: "Lock", icon: "lock", run: () => app.lock(c.id) }]
+            : [{ label: "Unlock…", icon: "unlock", run: open }]),
+        isHidden
+          ? { label: "Unhide", icon: "eye", run: () => app.setHidden(c.id, false) }
+          : { label: "Hide on this device", icon: "eye-off", run: () => app.setHidden(c.id, true) },
+        { label: "Channel options…", icon: "settings", run: () => app.channelOptions(c.id) },
+      ]
+    }
+  }
 </script>
 
 <nav class="sidebar" aria-label="Channels">
@@ -29,7 +49,7 @@
 
     {#if open.length}<div class="section">Channels</div>{/if}
     {#each open as c (c.id)}
-      <a class="item" class:active={active === c.id} href="#/c/{c.id}">
+      <a class="item" class:active={active === c.id} href="#/c/{c.id}" use:contextMenu={menu(c)}>
         <Icon name="hash" size={18} />
         <span class="label">{channelLabel(c)}</span>
         <span class="count">{c.noteCount || ""}</span>
@@ -43,6 +63,7 @@
         class:active={active === c.id}
         class:unlocked={c.unlocked}
         href="#/c/{c.id}"
+        use:contextMenu={menu(c)}
       >
         <Icon name={c.unlocked ? "unlock" : "lock"} size={18} />
         <span class="label">{channelLabel(c)}</span>
@@ -58,25 +79,13 @@
           class:locked={c.lock !== "open"}
           class:active={active === c.id}
           href="#/c/{c.id}"
+          use:contextMenu={menu(c)}
         >
           <Icon name={c.lock === "open" ? "hash" : c.unlocked ? "unlock" : "lock"} size={18} />
           <span class="label">{channelLabel(c)}</span>
           <span class="count">{c.noteCount || ""}</span>
         </a>
       {/each}
-    {/if}
-    {#if hidden.length}
-      <button
-        class="item reveal"
-        aria-pressed={app.showHidden}
-        onclick={() => app.setShowHidden(!app.showHidden)}
-      >
-        <Icon name={app.showHidden ? "eye-off" : "eye"} size={18} />
-        <span class="label"
-          >{app.showHidden ? "Hide" : "Show"}
-          {hidden.length} hidden channel{hidden.length === 1 ? "" : "s"}</span
-        >
-      </button>
     {/if}
 
     {#if creating}
@@ -94,6 +103,16 @@
       <Icon name="settings" size={20} />
       <span class="label">Settings</span>
     </a>
+    <!-- Always here, whether or not anything is hidden, so it says nothing about how many are. -->
+    <button
+      class="icon-btn"
+      aria-label="Hidden channels"
+      title={app.showHidden ? "Hide hidden channels" : "Show hidden channels"}
+      aria-pressed={app.showHidden}
+      onclick={() => app.setShowHidden(!app.showHidden)}
+    >
+      <Icon name={app.showHidden ? "eye" : "eye-off"} size={20} />
+    </button>
     <button
       class="icon-btn"
       onclick={() => app.cycleTheme()}
@@ -161,6 +180,8 @@
     text-align: left;
     width: 100%;
     cursor: pointer;
+    /* a long press opens the channel's menu, not the browser's link callout */
+    -webkit-touch-callout: none;
   }
   .item :global(svg) {
     color: var(--muted);
@@ -195,13 +216,9 @@
     color: var(--faint);
     font-variant-numeric: tabular-nums;
   }
-  .add,
-  .reveal {
+  .add {
     color: var(--muted);
     margin-top: 8px;
-  }
-  .reveal {
-    font-size: 0.9rem;
   }
   .foot {
     display: flex;

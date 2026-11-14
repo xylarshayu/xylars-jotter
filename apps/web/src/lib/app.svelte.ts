@@ -103,6 +103,14 @@ export function channelLabel(c: Pick<ChannelView, "id" | "name"> | undefined): s
   return c.name ?? `Locked · ${c.id.slice(-4)}`
 }
 
+/** An entry in the menu a right click or long press opens on a note or channel. */
+export interface MenuItem {
+  label: string
+  icon: string
+  danger?: boolean
+  run: () => void
+}
+
 class App {
   phase = $state<"loading" | "setup" | "ready" | "failed">("loading")
   route = $state<Route>(parseHash(location.hash))
@@ -118,6 +126,8 @@ class App {
   /** The first sync while setting this device up, for a progress bar. */
   setupProgress = $state.raw<SyncProgress | null>(null)
   searching = $state(false)
+  /** In a channel, search covers just that channel unless this is set. */
+  searchAll = $state(false)
   query = $state("")
   results = $state.raw<NoteView[]>([])
   online = $state(navigator.onLine)
@@ -140,6 +150,7 @@ class App {
   draftFiles = $state.raw<File[]>([])
   composeTo = $state<string | null>(null)
   lightbox = $state<string | null>(null)
+  menu = $state.raw<{ x: number; y: number; items: MenuItem[] } | null>(null)
   openRecipient = $state("")
   /** Memory only: nothing in IndexedDB, forgotten on close or idle (ADR-0016). */
   temporary = $state(false)
@@ -153,6 +164,7 @@ class App {
   #offset = 0
   #limit = PAGE
   #jumpTo: string | null = null
+  #openPanel = false
   #gen = 0
   #refreshQueued = false
   #saveTimer: ReturnType<typeof setTimeout> | undefined
@@ -653,7 +665,9 @@ class App {
       }
     }
     this.selected = null
-    this.panel = null
+    this.panel = this.#openPanel ? "channel" : null
+    this.#openPanel = false
+    this.menu = null
     this.drawer = false
     if (this.editing) this.cancelEdit()
     void this.refresh()
@@ -668,7 +682,18 @@ class App {
   /* ------------------------------ search ---------------------------- */
 
   openSearch(): void {
+    if (!this.searching) this.searchAll = false
     this.searching = true
+  }
+
+  /** The channel search is limited to, if any: the one on screen, unless searching everywhere. */
+  get searchChannel(): ChannelView | undefined {
+    return this.searchAll ? undefined : this.current
+  }
+
+  setSearchAll(all: boolean): void {
+    this.searchAll = all
+    void this.refresh()
   }
 
   closeSearch(): void {
@@ -683,7 +708,14 @@ class App {
   }
 
   async #search(): Promise<NoteView[]> {
-    return (await this.nb.search(this.query)).filter((n) => !this.hidden(n.channelId)).slice(0, 200)
+    const notes = await this.nb.search(this.query, this.searchChannel?.id)
+    return notes.filter((n) => !this.hidden(n.channelId)).slice(0, 200)
+  }
+
+  /** Opens a channel with its options showing (rename, passphrase, hide, delete). */
+  channelOptions(channelId: string): void {
+    this.#openPanel = true
+    this.go({ view: "feed", channel: channelId })
   }
 
   /** Opens a search result in its channel, among the notes around it. */
@@ -919,7 +951,7 @@ class App {
     const ids = this.settings.hiddenChannels.filter((id) => id !== channelId)
     this.updateSettings({ hiddenChannels: hide ? [...ids, channelId] : ids })
     if (!hide) return void this.refresh()
-    this.toast("Hidden on this device. Show hidden channels from the sidebar.")
+    this.toast("Hidden on this device. The eye in the sidebar shows hidden channels.")
     // Hiding means out of sight now, even while hidden channels are being shown.
     this.showHidden = true
     this.setShowHidden(false)

@@ -121,7 +121,7 @@ test("jumps from a search result to the notes around it; hides a channel on this
   await page.keyboard.press("/")
   await page.getByRole("searchbox", { name: "Search notes" }).fill(n(20))
   await expect(feed(page).getByText(n(20))).toBeVisible()
-  await page.getByRole("button", { name: "Jump to note" }).click()
+  await page.getByRole("button", { name: "Jump to", exact: true }).click()
 
   // The channel opens at that note with its neighbours on both sides, not at the newest note.
   await expect(page.getByRole("searchbox", { name: "Search notes" })).toHaveCount(0)
@@ -142,30 +142,63 @@ test("jumps from a search result to the notes around it; hides a channel on this
     )
     .toBe(1)
 
+  // In a channel, search covers that channel unless switched to all of them.
+  await page.keyboard.press("/")
+  await page.getByRole("searchbox", { name: "Search notes" }).fill("synthetic")
+  await expect(feed(page).getByText(n(149))).toBeVisible()
+  await expect(feed(page).getByText("synthetic first note")).toHaveCount(0)
+  await page.getByRole("button", { name: "All", exact: true }).click()
+  await expect(feed(page).getByText("synthetic first note")).toBeVisible()
+  // A right click opens a note's menu, here with Jump to.
+  await feed(page)
+    .locator("article", { hasText: "synthetic first note" })
+    .click({ button: "right" })
+  const menu = page.getByRole("menu")
+  // (In order; "Fetch preview" may come before Delete, as the note has a link.)
+  await expect(menu.getByRole("menuitem")).toContainText([
+    "Jump to",
+    "Copy",
+    "Edit",
+    "Move…",
+    "History",
+    "Delete…",
+  ])
+  await page.keyboard.press("Escape")
+  await expect(menu).toHaveCount(0)
+  await page.keyboard.press("Escape")
+
   // Hidden: out of the sidebar, All notes and search, until shown again. Nothing else changes.
-  await page.getByRole("button", { name: "Channel options" }).click()
-  await page.getByRole("button", { name: "Hide", exact: true }).click()
-  await expect(page.getByRole("link", { name: "Synthetic log" })).toHaveCount(0)
+  // The eye is there whether or not anything is hidden, and says nothing about how many are.
+  const sidebar = page.getByRole("navigation", { name: "Channels" })
+  const channelLink = sidebar.getByRole("link", { name: "Synthetic log" })
+  const eye = sidebar.getByRole("button", { name: "Hidden channels" })
+  await expect(eye).toHaveAttribute("aria-pressed", "false")
+  // On a touch screen, holding a channel opens its menu, without following the link.
+  const box = (await channelLink.boundingBox())!
+  const touch = { identifier: 1, clientX: box.x + 20, clientY: box.y + 10 }
+  await channelLink.dispatchEvent("touchstart", { touches: [touch], changedTouches: [touch] })
+  await page.waitForTimeout(600)
+  await channelLink.dispatchEvent("touchend", { touches: [], changedTouches: [touch] })
+  await expect(page.getByRole("menu")).toBeVisible()
+  await page.getByRole("menuitem", { name: "Hide on this device" }).click()
+  await expect(channelLink).toHaveCount(0)
   await expect(feed(page).getByText("synthetic first note")).toBeVisible()
   await page.keyboard.press("/")
   await page.getByRole("searchbox", { name: "Search notes" }).fill("synthetic log")
   await expect(feed(page).getByText("No notes match.")).toBeVisible()
   await page.keyboard.press("Escape")
   await page.reload()
-  await expect(page.getByRole("link", { name: "Synthetic log" })).toHaveCount(0)
-  await page.getByRole("button", { name: "Show 1 hidden channel" }).click()
+  await expect(channelLink).toHaveCount(0)
+  await expect(sidebar.getByText(/\d+ hidden/)).toHaveCount(0)
+  await eye.click()
+  await expect(eye).toHaveAttribute("aria-pressed", "true")
   // Shown again, its notes return to All notes too, each with a link to the channel.
-  await page
-    .getByRole("navigation", { name: "Channels" })
-    .getByRole("link", { name: "Synthetic log" })
-    .click()
+  await channelLink.click()
   await expect(feed(page).getByText(n(149))).toBeVisible()
   await page.getByRole("button", { name: "Channel options" }).click()
   await page.getByRole("button", { name: "Unhide" }).click()
-  await expect(
-    page.getByRole("navigation", { name: "Channels" }).getByRole("link", { name: "Synthetic log" }),
-  ).toBeVisible()
-  await expect(page.getByRole("button", { name: /hidden channel/ })).toHaveCount(0)
+  await eye.click()
+  await expect(channelLink).toBeVisible()
 })
 
 test("attaches any file type: chips download, GIFs stay inline and untouched", async ({ page }) => {
