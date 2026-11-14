@@ -334,7 +334,7 @@ describe("locked channels", () => {
       scryptLogN: LOG_N,
     })
     nb.keys.lockAll()
-    await nb.changePassphrase(ch.id, "synthetic-old", "synthetic-new")
+    await nb.changePassphrase(ch.id, "synthetic-old", "synthetic-new", LOG_N)
     await expect(nb.unlock(ch.id, "synthetic-old")).rejects.toBeInstanceOf(CryptoError)
     await nb.unlock(ch.id, "synthetic-new")
   })

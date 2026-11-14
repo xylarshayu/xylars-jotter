@@ -319,15 +319,23 @@ export class Notebook {
     this.#changed()
   }
 
-  /** Re-wraps a locked channel's key with a new passphrase. Both passphrases are dropped after use. */
-  async changePassphrase(id: string, oldPassphrase: string, newPassphrase: string): Promise<void> {
+  /**
+   * Re-wraps a locked channel's key with a new passphrase. Both passphrases are dropped after use.
+   * `scryptLogN` defaults to age's work factor; tests lower it, as with createChannel.
+   */
+  async changePassphrase(
+    id: string,
+    oldPassphrase: string,
+    newPassphrase: string,
+    scryptLogN?: number,
+  ): Promise<void> {
     const row = this.channel(id)
     if (isOpenChannel(row)) throw new Error("open channels have no passphrase")
     const scratch = new KeyRing()
     await scratch.unlock(row, oldPassphrase)
     const identity = await scratch.identityFor(row)
     if (!identity) throw new LockedError()
-    const wrapped = await wrapWithPassphrase(identity, newPassphrase)
+    const wrapped = await wrapWithPassphrase(identity, newPassphrase, scryptLogN)
     const updated = await this.api.updateChannel(id, { wrappedKey: toBase64(wrapped) })
     this.replica.apply({ channels: [updated], notes: [] })
     this.#changed()
