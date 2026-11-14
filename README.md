@@ -138,7 +138,9 @@ One note per line; idempotent by `source_id`; channels must exist (import never 
 
 `jot import notes.jsonl --dry-run` validates first. Attachment paths are relative to the file.
 Import fetches link previews for notes in open channels (`--no-previews` to skip). `jot previews`
-fills in the ones still missing ([ADR-0013](docs/adr/0013-cli-previews.md)). Telegram exports:
+fills in the ones still missing ([ADR-0013](docs/adr/0013-cli-previews.md)), and
+`jot previews --shrink` shrinks stored preview images that are too large
+([ADR-0020](docs/adr/0020-small-preview-images.md)). Telegram exports:
 [tools/telegram](tools/telegram/README.md).
 
 ## Licence

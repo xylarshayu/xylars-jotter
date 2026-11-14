@@ -18,17 +18,24 @@ import {
 } from "@jot/core/model"
 import { isHybridAgeFile, isPassphraseAgeFile } from "./age.ts"
 import type { AppEnv } from "./env.ts"
-import { b64decode, b64encode, type C, HttpError, parse } from "./http.ts"
+import { b64decode, type C, hexToB64, HttpError, parse } from "./http.ts"
 import { unfurl, UnfurlError } from "./unfurl.ts"
 
 const ID_RE = /^[0-9A-HJKMNP-TV-Z]{26}$/
+
+/**
+ * Ciphertext columns are read as hex text (`hex(col) AS col`) and sent as base64. D1 hands text
+ * to the Worker far more cheaply than blobs, and both conversions are native (ADR-0020).
+ */
+type Hex = string
+const hex = (col: string) => `hex(${col}) AS ${col}`
 
 interface ChannelDb {
   id: string
   lock: string
   recipient: string
-  wrapped_key: ArrayBuffer
-  name: ArrayBuffer
+  wrapped_key: Hex
+  name: Hex
   created_at: number
   updated_at: number
   deleted_at: number | null
@@ -39,8 +46,8 @@ interface NoteDb {
   id: string
   channel_id: string
   version: number
-  body: ArrayBuffer
-  preview: ArrayBuffer | null
+  body: Hex
+  preview: Hex | null
   size: number
   created_at: number
   updated_at: number
@@ -52,8 +59,8 @@ const channelOut = (r: ChannelDb): ChannelRow => ({
   id: r.id,
   lock: r.lock === "open" ? "open" : "locked",
   recipient: r.recipient,
-  wrappedKey: b64encode(r.wrapped_key),
-  name: b64encode(r.name),
+  wrappedKey: hexToB64(r.wrapped_key),
+  name: hexToB64(r.name),
   createdAt: r.created_at,
   updatedAt: r.updated_at,
   deletedAt: r.deleted_at,
@@ -64,8 +71,8 @@ const noteOut = (r: NoteDb): NoteRow => ({
   id: r.id,
   channelId: r.channel_id,
   version: r.version,
-  body: b64encode(r.body),
-  preview: r.preview === null ? null : b64encode(r.preview),
+  body: hexToB64(r.body),
+  preview: r.preview === null ? null : hexToB64(r.preview),
   size: r.size,
   createdAt: r.created_at,
   updatedAt: r.updated_at,
@@ -73,10 +80,9 @@ const noteOut = (r: NoteDb): NoteRow => ({
   seq: r.seq,
 })
 
-const CHANNEL_COLS =
-  "id, lock, recipient, wrapped_key, name, created_at, updated_at, deleted_at, seq"
-const NOTE_COLS =
-  "id, channel_id, version, body, preview, size, created_at, updated_at, deleted_at, seq"
+const CHANNEL_COLS = `id, lock, recipient, ${hex("wrapped_key")}, ${hex("name")}, created_at, updated_at, deleted_at, seq`
+const NOTE_COLS = `id, channel_id, version, ${hex("body")},
+  iif(preview IS NULL, NULL, hex(preview)) AS preview, size, created_at, updated_at, deleted_at, seq`
 
 function hybridBlob(b64: string, max: number, what: string): Uint8Array {
   // Refuse oversized payloads before decoding them: 4 characters carry 3 bytes.
@@ -322,12 +328,9 @@ api.put("/notes/:id", async (c) => {
     throw new HttpError(422, "purge_required")
   }
   const body = hybridBlob(req.body, MAX_NOTE_BYTES, "body")
-  const preview =
-    req.preview === undefined
-      ? note.preview
-      : req.preview === null
-        ? null
-        : hybridBlob(req.preview, MAX_PREVIEW_BYTES, "preview")
+  // Left out of the request: the stored preview stays as it is.
+  const keepPreview = req.preview === undefined
+  const preview = req.preview ? hybridBlob(req.preview, MAX_PREVIEW_BYTES, "preview") : null
   const now = Date.now()
   const stmts = [bump(c)]
   if (req.purgeHistory) {
@@ -344,7 +347,7 @@ api.put("/notes/:id", async (c) => {
   }
   stmts.push(
     c.env.DB.prepare(
-      `UPDATE notes SET channel_id = ?3, version = version + 1, body = ?4, preview = ?5, size = ?6, updated_at = ?7, seq = ${SEQ}
+      `UPDATE notes SET channel_id = ?3, version = version + 1, body = ?4, preview = ${keepPreview ? "preview" : "?5"}, size = ?6, updated_at = ?7, seq = ${SEQ}
        WHERE user_id = ?1 AND id = ?2 AND version = ?8 AND deleted_at IS NULL`,
     ).bind(uid, id, target.id, body, preview, body.length, now, req.baseVersion),
   )
@@ -393,15 +396,15 @@ api.delete("/notes/:id", async (c) => {
 api.get("/notes/:id/versions", async (c) => {
   const id = param(c, "id")
   const rows = await c.env.DB.prepare(
-    "SELECT version, channel_id, body, created_at FROM note_versions WHERE user_id = ? AND note_id = ? ORDER BY version",
+    `SELECT version, channel_id, ${hex("body")}, created_at FROM note_versions WHERE user_id = ? AND note_id = ? ORDER BY version`,
   )
     .bind(c.get("userId"), id)
-    .all<{ version: number; channel_id: string; body: ArrayBuffer; created_at: number }>()
+    .all<{ version: number; channel_id: string; body: Hex; created_at: number }>()
   return c.json(
     rows.results.map((r) => ({
       version: r.version,
       channelId: r.channel_id,
-      body: b64encode(r.body),
+      body: hexToB64(r.body),
       createdAt: r.created_at,
     })),
   )
@@ -517,7 +520,7 @@ const DUMP_SQL: Record<DumpTable, string> = {
   channels: pageSql(`t.rowid AS r, ${CHANNEL_COLS}`, "channels", "rowid", "length(name)"),
   notes: pageSql(`t.rowid AS r, ${NOTE_COLS}, source_hash`, "notes", "rowid", NOTE_BYTES),
   versions: pageSql(
-    "t.rowid AS r, note_id, version, channel_id, body, created_at",
+    `t.rowid AS r, note_id, version, channel_id, ${hex("body")}, created_at`,
     "note_versions",
     "rowid",
     "length(body)",
@@ -538,7 +541,7 @@ const dumpOut: Record<DumpTable, (r: DumpDb) => unknown> = {
     noteId: r.note_id,
     version: r.version,
     channelId: r.channel_id,
-    body: b64encode(r.body as ArrayBuffer),
+    body: hexToB64(r.body as Hex),
     createdAt: r.created_at,
   }),
   attachments: (r) => ({

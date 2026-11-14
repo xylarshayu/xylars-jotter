@@ -481,6 +481,26 @@ describe("jot", () => {
       expect(image.length).toBeLessThanOrEqual(MAX_PREVIEW_IMAGE)
     })
 
+    it("previews --shrink re-seals stored images that are too large, fetching nothing", async () => {
+      // A preview stored before ADR-0020, with its image as fetched (no shrinker here).
+      const nb = await reader(inject("serverUrl"), keyFile)
+      const links = (await nb.findChannel("Links"))!
+      const old = (await nb.addNote(links.id, "synthetic stored https://example.com/stored")).id
+      await nb.setPreviews(old, [
+        { url: "https://example.com/stored", title: "Synthetic stored", image: bigImage },
+      ])
+      await nb.flush()
+
+      expect((await jot(["previews", "--shrink", "--refresh"])).code).toBe(1)
+      expect(await ok(["previews", "--shrink"])).toBe("previews: shrank images in 1 notes")
+      expect(unfurled).toEqual([])
+      const after = await reader(inject("serverUrl"), keyFile)
+      const [p] = (await after.noteView(after.replica.notes.get(old)!))!.previews
+      expect(p!.title).toBe("Synthetic stored")
+      expect(p!.image!.length).toBeLessThanOrEqual(MAX_PREVIEW_IMAGE)
+      expect(await ok(["previews", "--shrink"])).toBe("previews: shrank images in 0 notes")
+    })
+
     it("locked channels need -c, --locked and an unlock", async () => {
       const without = await jot(["previews", "-c", vault])
       expect(without.code).toBe(1)

@@ -48,6 +48,11 @@ export function b64encode(bytes: Uint8Array | ArrayBuffer | null): string {
   return (bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)).toBase64()
 }
 
+/** A blob column read as `hex(col)`, as base64 for the wire. */
+export function hexToB64(hex: string): string {
+  return Uint8Array.fromHex(hex).toBase64()
+}
+
 /** `n` random bytes as base64url without padding: 16 bytes give 22 characters, 32 give 43. */
 export function randomB64url(n: number): string {
   return crypto

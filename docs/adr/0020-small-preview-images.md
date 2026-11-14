@@ -17,7 +17,7 @@ over every byte.
 ## Decision
 
 - **Clients shrink large preview images before sealing.** An image whose data URL is over
-  `MAX_PREVIEW_IMAGE` (32 K characters, about 24 KB) is re-encoded with its short side scaled to
+  `MAX_PREVIEW_IMAGE` (12 K characters, about 9 KB) is re-encoded with its short side scaled to
   256 px, then 160 px, then 96 px, as WebP, until it fits. If none fits, or it can't be decoded,
   the image is dropped and the title and description stay. An image that already fits is kept
   byte for byte. The steps live in `@jot/core` (`PREVIEW_IMAGE_STEPS`, `fitPreviewImage`). The
@@ -25,10 +25,14 @@ over every byte.
   the CLI uses sharp, loaded only when an image needs it. The Worker can't decode images, and the
   client is where the plaintext is.
 - **`jot migrate` applies the same rule** to previews in open channels, which the migrating key
-  can open. Locked channels' previews are copied as they are.
+  can open. Locked channels' previews are copied as they are. `jot previews --shrink` applies it
+  to previews already stored, through the normal API, and fetches nothing.
+- **Ciphertext is read from D1 as hex text** (`hex(col)`), converted with the native
+  `Uint8Array.fromHex` and `toBase64`. D1 hands blobs to the Worker at about 25 ms of CPU per MB
+  (measured on the deployment: 1 MB sync pages took 20 to 60 ms); as text, a 250 KB page takes
+  2 to 5 ms.
 - **Pages are bounded by bytes, not only rows.** Sync and dump pages stop once about 192 KB of
-  ciphertext is in (always at least one row). Measured on the deployment, reading blobs from D1
-  and encoding them costs about 25 ms of CPU per MB: 1 MB pages took 20 to 60 ms. SQLite adds up the sizes from row headers, so only
+  ciphertext is in (always at least one row). SQLite adds up the sizes from row headers, so only
   the rows sent are read in full. Restore requests from `jot migrate` are split the same way on
   the client (25 rows or about 96 KB).
 - **Base64 uses the runtime's native codec** (`Uint8Array.fromBase64` and `toBase64` in workerd),

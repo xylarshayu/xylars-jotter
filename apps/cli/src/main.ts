@@ -207,6 +207,7 @@ function build(io: Io, session: Session, ctxs: Context[]): Command {
     .option("-c, --channel <channel>", "one channel, by name or id")
     .option("--missing", "only notes with links but no previews (default)")
     .option("--refresh", "also re-fetch notes that already have previews")
+    .option("--shrink", "shrink stored preview images that are too large; fetches nothing")
     .option("--locked", "allow a locked channel given with -c (needs `jot unlock`)")
     .option("-n, --limit <n>", "at most this many notes")
     .option("--json", "JSON output")
@@ -215,6 +216,7 @@ function build(io: Io, session: Session, ctxs: Context[]): Command {
         channel?: string
         locked?: boolean
         refresh?: boolean
+        shrink?: boolean
         limit?: string
         json?: boolean
       }) => cmd.previewsCmd(await open({ requireOpenKey: false }), o),

@@ -4,14 +4,17 @@ import {
   type AttachmentRef,
   type ChannelRow,
   type ChannelView,
+  fitPreviewImage,
   type ImportLine,
   isOpenChannel,
   MAX_ATTACHMENT_PLAIN_BYTES,
+  MAX_PREVIEW_IMAGE,
   type NoteView,
   parseImportLine,
 } from "@jot/core"
 import { generateKeyPair } from "@jot/crypto"
 import { CliError, type Context, type Io, writePrivate } from "./context.ts"
+import { shrinkPreviewImage } from "./images.ts"
 
 export interface OutputOpts {
   json?: boolean
@@ -383,12 +386,13 @@ export async function importJsonl(
 const PREVIEW_CONCURRENCY = 4
 
 /**
- * Fetches and stores link previews for the given notes, a few at a time.
- * Progress goes to stderr as counts only. Best effort: a link that fails is skipped.
+ * Runs `update` on the given notes, a few at a time, then uploads the results. `update` returns
+ * whether it changed the note. Progress goes to stderr as counts only.
  */
-async function fillPreviews(
+async function updatePreviews<T>(
   ctx: Context,
-  notes: { id: string; links: string[] }[],
+  notes: T[],
+  update: (n: T) => Promise<boolean>,
   progressEvery = 50,
 ): Promise<{ checked: number; found: number }> {
   let next = 0
@@ -396,15 +400,10 @@ async function fillPreviews(
   let found = 0
   const worker = async () => {
     while (next < notes.length) {
-      const n = notes[next++]!
-      const items = await ctx.nb.fetchPreviews(n.links)
-      if (items.length) {
-        await ctx.nb.setPreviews(n.id, items)
-        found++
-      }
+      if (await update(notes[next++]!)) found++
       if (++checked % progressEvery === 0) {
         ctx.save()
-        ctx.io.err(`previews: ${checked}/${notes.length} checked, ${found} found`)
+        ctx.io.err(`previews: ${checked}/${notes.length} checked, ${found} updated`)
       }
     }
   }
@@ -415,20 +414,51 @@ async function fillPreviews(
   return { checked, found }
 }
 
+/** Fetches and stores link previews. Best effort: a link that fails is skipped. */
+function fillPreviews(ctx: Context, notes: Pick<NoteView, "id" | "links">[]) {
+  return updatePreviews(ctx, notes, async (n) => {
+    const items = await ctx.nb.fetchPreviews(n.links)
+    if (items.length) await ctx.nb.setPreviews(n.id, items)
+    return items.length > 0
+  })
+}
+
+const hasLargeImage = (n: NoteView) =>
+  n.previews.some((p) => (p.image?.length ?? 0) > MAX_PREVIEW_IMAGE)
+
+/** Re-seals stored previews with their large images shrunk (ADR-0020). Fetches nothing. */
+function shrinkPreviews(ctx: Context, notes: NoteView[]) {
+  return updatePreviews(ctx, notes, async (n) => {
+    const items = await Promise.all(n.previews.map((p) => fitPreviewImage(p, shrinkPreviewImage)))
+    await ctx.nb.setPreviews(n.id, items)
+    return true
+  })
+}
+
 /**
  * `jot previews`: backfills link previews. Without -c it covers every open channel.
  * A locked channel needs an explicit -c, --locked and `jot unlock` (previews send
  * the links to the server's unfurl endpoint, so locked channels are opt-in only).
+ * With --shrink it fetches nothing: it re-seals stored previews whose images are too large, and
+ * a locked channel only needs `jot unlock`.
  */
 export async function previewsCmd(
   ctx: Context,
-  opts: { channel?: string; locked?: boolean; refresh?: boolean; limit?: string; json?: boolean },
+  opts: {
+    channel?: string
+    locked?: boolean
+    refresh?: boolean
+    shrink?: boolean
+    limit?: string
+    json?: boolean
+  },
 ): Promise<void> {
+  if (opts.shrink && opts.refresh) throw new CliError("--shrink and --refresh don't go together")
   let channels: ChannelRow[]
   if (opts.channel) {
     const ch = await resolveChannel(ctx, opts.channel)
     if (!isOpenChannel(ch)) {
-      if (!opts.locked)
+      if (!opts.locked && !opts.shrink)
         throw new CliError(
           "locked channel: previews send its links to the unfurl endpoint; pass --locked to opt in",
         )
@@ -444,20 +474,18 @@ export async function previewsCmd(
   }
   const limit = opts.limit === undefined ? Infinity : Number(opts.limit)
   if (!(limit > 0)) throw new CliError("--limit must be a positive number")
-  const todo: { id: string; links: string[] }[] = []
-  for (const ch of channels) {
-    for (const n of await ctx.nb.notes(ch.id)) {
-      if (n.pending || !n.links.length) continue
-      if (!opts.refresh && n.previews.length) continue
-      todo.push({ id: n.id, links: n.links })
-    }
-  }
+  const wanted = opts.shrink
+    ? hasLargeImage
+    : (n: NoteView) => n.links.length > 0 && (opts.refresh || !n.previews.length)
+  const todo: NoteView[] = []
+  for (const ch of channels)
+    for (const n of await ctx.nb.notes(ch.id)) if (!n.pending && wanted(n)) todo.push(n)
   const batch = todo.slice(0, limit)
-  const r = batch.length ? await fillPreviews(ctx, batch) : { checked: 0, found: 0 }
+  const run = opts.shrink ? shrinkPreviews : fillPreviews
+  const r = batch.length ? await run(ctx, batch) : { checked: 0, found: 0 }
   const left = todo.length - batch.length
+  const more = left ? `; ${left} left` : ""
   if (opts.json) ctx.io.out(JSON.stringify({ ...r, remaining: left }))
-  else
-    ctx.io.out(
-      `previews: ${r.found} of ${r.checked} notes with links${left ? `; ${left} left` : ""}`,
-    )
+  else if (opts.shrink) ctx.io.out(`previews: shrank images in ${r.found} notes${more}`)
+  else ctx.io.out(`previews: ${r.found} of ${r.checked} notes with links${more}`)
 }

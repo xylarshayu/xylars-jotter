@@ -8,8 +8,8 @@
  */
 import type { PreviewItem } from "./model.ts"
 
-/** The largest preview image kept, as data URL characters (about 24 KB of image). */
-export const MAX_PREVIEW_IMAGE = 32 * 1024
+/** The largest preview image kept, as data URL characters (about 9 KB of image). */
+export const MAX_PREVIEW_IMAGE = 12 * 1024
 
 /**
  * Re-encode attempts, in order, until one fits: the image's short side is scaled down to `side`

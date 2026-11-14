@@ -245,7 +245,7 @@ describe("notes", () => {
   })
 
   it("searches text and link previews, newest first", async () => {
-    const { nb } = await notebook()
+    const { nb, open } = await notebook()
     const ch = await nb.createChannel({ name: "Inbox", lock: "open" })
     await nb.addNote(ch.id, "groceries: lemons", { createdAt: 1000 })
     const b = await nb.addNote(ch.id, "https://example.com/post", { createdAt: 2000 })
@@ -255,6 +255,15 @@ describe("notes", () => {
     expect((await nb.search("cafe kinetics")).map((n) => n.id)).toEqual([b.id])
     expect((await nb.search("lemons")).map((n) => n.text)).toEqual(["groceries: lemons"])
     expect(await nb.search("lemons kinetics")).toEqual([])
+
+    // An edit that leaves the preview out keeps it on the server.
+    await nb.editNote(b.id, "https://example.com/post edited")
+    const reader = new Notebook({ api: api() })
+    await reader.keys.setOpenKey(open.identity)
+    await reader.sync()
+    const view = await reader.noteView(reader.replica.notes.get(b.id)!)
+    expect(view!.text).toBe("https://example.com/post edited")
+    expect(view!.previews.map((p) => p.title)).toEqual(["Café Kinetics"])
   })
 })
 
