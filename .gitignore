@@ -1,0 +1,15 @@
+node_modules/
+dist/
+.nx/
+.wrangler/
+.dev.vars*
+.env*
+*.age.identity
+coverage/
+.DS_Store
+playwright-report/
+test-results/
+*.tsbuildinfo
+__pycache__/
+apps/worker/wrangler.deploy.json
+*.local.md

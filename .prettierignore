@@ -1,0 +1,7 @@
+pnpm-lock.yaml
+dist
+.nx
+.wrangler
+coverage
+docs/BRIEF.md
+**/test/fixtures/**

@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Template: runs `jot mirror` every 5 minutes. Not installed automatically.
+  Replace __HOME__, __NODE__ (output of `command -v node`; launchd's PATH has no
+  Homebrew or nvm) and __JOT__ (absolute path to the built dist/jot.mjs), then:
+    cp jot.mirror.plist ~/Library/LaunchAgents/
+    launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/jot.mirror.plist
+  Server, open key file and Access service token come from ~/.config/jot/config.json
+  and ~/.config/jot/env (sourced below; mode 600).
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>jot.mirror</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/sh</string>
+    <string>-c</string>
+    <string>set -a; . "__HOME__/.config/jot/env"; set +a; exec "__NODE__" "__JOT__" mirror</string>
+  </array>
+  <key>StartInterval</key>
+  <integer>300</integer>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>LowPriorityIO</key>
+  <true/>
+  <key>ProcessType</key>
+  <string>Background</string>
+  <key>StandardOutPath</key>
+  <string>__HOME__/Library/Logs/jot-mirror.log</string>
+  <key>StandardErrorPath</key>
+  <string>__HOME__/Library/Logs/jot-mirror.log</string>
+</dict>
+</plist>

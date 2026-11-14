@@ -1,0 +1,26 @@
+{
+  "name": "@jot/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --var AUTH_MODE:dev --port 8787",
+    "lint": "eslint .",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "build": "wrangler deploy --dry-run --outdir dist",
+    "migrate:local": "wrangler d1 migrations apply jot --local"
+  },
+  "dependencies": {
+    "@jot/core": "workspace:*",
+    "hono": "4.13.18"
+  },
+  "devDependencies": {
+    "@cloudflare/vitest-plugin": "1.8.0",
+    "@cloudflare/workers-types": "5.20261110.1",
+    "wrangler": "4.160.1",
+    "@jot/crypto": "workspace:*",
+    "age-encryption": "0.3.1",
+    "zod": "4.6.7"
+  }
+}

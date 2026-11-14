@@ -1,0 +1,24 @@
+{
+  "name": "@jot/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "jot": "./dist/jot.mjs"
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "vitest run",
+    "build": "node build.mjs"
+  },
+  "dependencies": {
+    "@jot/core": "workspace:*",
+    "@jot/crypto": "workspace:*",
+    "commander": "15.1.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "wrangler": "4.160.1"
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "name": "xylars-jotter",
+  "private": true,
+  "license": "Apache-2.0",
+  "type": "module",
+  "packageManager": "pnpm@12.14.0",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "check": "nx run-many -t lint typecheck test build",
+    "affected": "nx affected -t lint typecheck test build",
+    "dev": "pnpm --filter @jot/web build && pnpm --filter @jot/worker dev",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "provision": "node tools/provision/provision.mjs"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@types/node": "24.19.2",
+    "eslint": "10.14.0",
+    "eslint-plugin-svelte": "3.24.1",
+    "globals": "17.14.0",
+    "nx": "24.0.6",
+    "prettier": "3.10.0",
+    "prettier-plugin-svelte": "4.1.1",
+    "svelte-eslint-parser": "1.10.1",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.72.2",
+    "vitest": "4.1.12"
+  }
+}

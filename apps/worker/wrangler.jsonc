@@ -1,0 +1,32 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "jot",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": false },
+  "send_metrics": false,
+  "minify": true,
+  // Only the Access-protected custom domain serves the app (route added by `pnpm provision`, DEPLOY.md).
+  "workers_dev": false,
+  "preview_urls": false,
+  "assets": {
+    "directory": "../web/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/device-api/*"],
+  },
+  "d1_databases": [
+    // database_id is filled in by `pnpm provision` in the gitignored wrangler.deploy.json.
+    {
+      "binding": "DB",
+      "database_name": "jot",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations",
+    },
+  ],
+  "r2_buckets": [{ "binding": "FILES", "bucket_name": "jot-files" }],
+  // Cloudflare Access settings are Worker secrets, not vars, so nothing personal is committed:
+  // ACCESS_TEAM_DOMAIN, ACCESS_AUD, OWNER_EMAIL, SERVICE_TOKEN_CLIENT_ID (see DEPLOY.md).
+  // Until they are set, every API request fails with auth_not_configured.
+}

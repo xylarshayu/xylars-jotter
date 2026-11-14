@@ -1,0 +1,11 @@
+{
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "name": "telegram-import",
+  "projectType": "application",
+  "targets": {
+    "test": {
+      "command": "python3 -I -m unittest discover -s tools/telegram -p 'test_*.py'",
+      "inputs": ["default"]
+    }
+  }
+}

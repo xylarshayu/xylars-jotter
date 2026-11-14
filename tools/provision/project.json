@@ -1,0 +1,15 @@
+{
+  "$schema": "../../node_modules/nx/schemas/project-schema.json",
+  "name": "provision",
+  "projectType": "application",
+  "targets": {
+    "test": {
+      "command": "node --test tools/provision/provision.test.mjs",
+      "inputs": ["default", "{workspaceRoot}/apps/worker/wrangler.jsonc"]
+    },
+    "lint": {
+      "command": "eslint tools/provision",
+      "inputs": ["default"]
+    }
+  }
+}
