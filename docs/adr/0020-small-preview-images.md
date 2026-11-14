@@ -26,8 +26,9 @@ over every byte.
   client is where the plaintext is.
 - **`jot migrate` applies the same rule** to previews in open channels, which the migrating key
   can open. Locked channels' previews are copied as they are.
-- **Pages are bounded by bytes, not only rows.** Sync and dump pages stop once about 1 MB of
-  ciphertext is in (always at least one row). SQLite adds up the sizes from row headers, so only
+- **Pages are bounded by bytes, not only rows.** Sync and dump pages stop once about 192 KB of
+  ciphertext is in (always at least one row). Measured on the deployment, reading blobs from D1
+  and encoding them costs about 25 ms of CPU per MB: 1 MB pages took 20 to 60 ms. SQLite adds up the sizes from row headers, so only
   the rows sent are read in full. Restore requests from `jot migrate` are split the same way on
   the client (25 rows or about 96 KB).
 - **Base64 uses the runtime's native codec** (`Uint8Array.fromBase64` and `toBase64` in workerd),

@@ -24,6 +24,7 @@ import {
   sealNoteBody,
   startPairing,
 } from "@jot/core"
+import { PAGE_BYTES } from "../src/api.ts"
 import { agentOf, sourceOf } from "../src/sessions.ts"
 import { CryptoError, encryptTo, generateKeyPair, toBase64 } from "@jot/crypto"
 
@@ -221,10 +222,10 @@ describe("notes", () => {
     expect(await reader.notes(ch.id)).toHaveLength(7)
   })
 
-  it("ends a page at about 1 MB of ciphertext, never skipping or repeating a note", async () => {
+  it("ends a page at about PAGE_BYTES of ciphertext, never skipping or repeating a note", async () => {
     const { nb, open } = await notebook()
     const ch = await nb.createChannel({ name: "Inbox", lock: "open" })
-    const big = "synthetic ".repeat(20_000) // 200 KB of text per note
+    const big = "synthetic ".repeat(6_000) // 60 KB of text per note
     for (let i = 0; i < 8; i++) await nb.addNote(ch.id, `${i} ${big}`)
     const reader = new Notebook({ api: api() })
     await reader.keys.setOpenKey(open.identity)
@@ -232,7 +233,7 @@ describe("notes", () => {
     for (;;) {
       const page = await reader.api.sync(reader.replica.cursor, 1000)
       const bytes = page.notes.reduce((n, r) => n + r.body.length * 0.75, 0)
-      expect(bytes).toBeLessThan(1024 * 1024 + 256 * 1024) // the budget plus at most one note
+      expect(bytes).toBeLessThan(PAGE_BYTES + 64 * 1024) // the budget plus at most one note
       seen.push(...page.notes.filter((r) => r.channelId === ch.id).map((r) => r.id))
       reader.replica.apply(page)
       reader.replica.cursor = page.cursor
@@ -485,7 +486,7 @@ describe("locked channel names (ADR-0014)", () => {
 describe("store copy: dump and restore (ADR-0015)", () => {
   const post = (path: string, body: unknown) =>
     raw(path, { method: "POST", body: JSON.stringify(body) })
-  // Pages end at about 1 MB, and earlier tests store large notes: read everything.
+  // Pages end at PAGE_BYTES, and earlier tests store large notes: read everything.
   async function dumpAll<T extends DumpTable>(a: Api, table: T) {
     const rows: DumpRow<T>[] = []
     for (let after = 0; ;) {

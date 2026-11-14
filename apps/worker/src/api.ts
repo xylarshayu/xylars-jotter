@@ -147,10 +147,10 @@ accessOnly.get("/login", (c) => c.redirect("/", 302))
 
 /**
  * Pages end at a row count or once about PAGE_BYTES of ciphertext is in (always at least one
- * row), whichever comes first. A page of notes with big previews would otherwise cost more CPU
- * to encode than a request gets on the free plan.
+ * row), whichever comes first. Reading blobs from D1 and encoding them costs about 25 ms of CPU
+ * per MB, and a request gets 10 ms on the free plan (measured, ADR-0020).
  */
-const PAGE_BYTES = 1024 * 1024
+export const PAGE_BYTES = 192 * 1024
 const NOTE_BYTES = "length(body) + ifnull(length(preview), 0)"
 
 /** A paged row, with the running total of ciphertext bytes up to and including it. */
