@@ -149,9 +149,11 @@ test("jumps from a search result to the notes around it; hides a channel on this
   await expect(feed(page).getByText("synthetic first note")).toHaveCount(0)
   await page.getByRole("button", { name: "All", exact: true }).click()
   await expect(feed(page).getByText("synthetic first note")).toBeVisible()
-  // A right click opens a note's menu, here with Jump to.
+  // A right click opens a note's menu, here with Jump to. (On its time: over its link or link
+  // preview, the browser's own menu opens, for the link.)
   await feed(page)
     .locator("article", { hasText: "synthetic first note" })
+    .locator("time")
     .click({ button: "right" })
   const menu = page.getByRole("menu")
   // (In order; "Fetch preview" may come before Delete, as the note has a link.)
