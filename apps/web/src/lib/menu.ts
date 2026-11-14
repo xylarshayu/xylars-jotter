@@ -30,6 +30,11 @@ export function contextMenu(node: HTMLElement, items: () => MenuItem[]) {
     if (Date.now() - heldAt < 1000) return e.preventDefault()
     if (native(e.target)) return
     e.preventDefault()
+    // Android's own long press can come first: treat it as the press, so lifting taps nothing.
+    if (start) {
+      cancel()
+      heldAt = Date.now()
+    }
     if (e.clientX || e.clientY) open(e.clientX, e.clientY)
     else {
       const r = node.getBoundingClientRect()

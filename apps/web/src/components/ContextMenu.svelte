@@ -17,6 +17,13 @@
   })
 
   const close = () => (app.menu = null)
+  // A long press opens the menu under the finger, and Android then sends its own contextmenu
+  // to whatever is there now: the backdrop. That one mustn't close the menu it just opened.
+  const opened = Date.now()
+  function oncontextmenu(e: MouseEvent) {
+    e.preventDefault()
+    if (Date.now() - opened > 1000) close()
+  }
 
   function pick(item: MenuItem) {
     close()
@@ -39,16 +46,7 @@
 
 <svelte:window onresize={close} />
 
-<div
-  class="backdrop"
-  role="presentation"
-  onclick={close}
-  oncontextmenu={(e) => {
-    e.preventDefault()
-    close()
-  }}
-  onwheel={close}
-></div>
+<div class="backdrop" role="presentation" onclick={close} {oncontextmenu} onwheel={close}></div>
 <div
   class="menu"
   role="menu"
@@ -57,6 +55,7 @@
   style:left="{left || x}px"
   style:top="{top || y}px"
   {onkeydown}
+  oncontextmenu={(e) => e.preventDefault()}
 >
   {#each items as item (item.label)}
     <button class="entry" class:danger={item.danger} role="menuitem" onclick={() => pick(item)}>
@@ -82,6 +81,10 @@
     background: var(--surface);
     border: 1px solid var(--line);
     box-shadow: var(--shadow-lg);
+    /* nothing in it to select or call out on a long press */
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
   }
   .entry {
     display: flex;

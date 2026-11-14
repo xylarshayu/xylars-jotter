@@ -156,9 +156,13 @@
         <Icon name="jump" size={16} />Jump to
       </button>
     {/if}
-    {#if note.pending}<span class="clock" title="Waiting to upload"
-        ><Icon name="clock" size={14} /></span
-      >{/if}
+    {#if note.pending}
+      {#if app.online}
+        <span class="spinner" role="img" title="Uploading" aria-label="Uploading"></span>
+      {:else}
+        <span class="clock" title="Waiting to upload"><Icon name="clock" size={14} /></span>
+      {/if}
+    {/if}
     {#if note.version > 1}<span>edited</span>{/if}
     <time datetime={new Date(note.createdAt).toISOString()} title={fullDate(note.createdAt)}
       >{timeLabel(note.createdAt)}</time
@@ -382,6 +386,24 @@
   .jump:hover,
   .jump:focus-visible {
     background: color-mix(in srgb, var(--accent) 24%, transparent);
+  }
+  .spinner {
+    width: 12px;
+    height: 12px;
+    border-radius: 50%;
+    border: 2px solid var(--line);
+    border-top-color: var(--accent);
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .spinner {
+      animation-duration: 2.4s;
+    }
   }
   .clock {
     display: inline-flex;

@@ -147,6 +147,13 @@ test("jumps from a search result to the notes around it; hides a channel on this
   await page.getByRole("searchbox", { name: "Search notes" }).fill("synthetic")
   await expect(feed(page).getByText(n(149))).toBeVisible()
   await expect(feed(page).getByText("synthetic first note")).toHaveCount(0)
+  // On a phone the search bar, with its switch, still fits the screen.
+  const size = page.viewportSize()!
+  await page.setViewportSize({ width: 360, height: 740 })
+  await expect
+    .poll(() => page.evaluate(() => document.documentElement.scrollWidth))
+    .toBeLessThanOrEqual(360)
+  await page.setViewportSize(size)
   await page.getByRole("button", { name: "All", exact: true }).click()
   await expect(feed(page).getByText("synthetic first note")).toBeVisible()
   // A right click opens a note's menu, here with Jump to. (On its time: over its link or link

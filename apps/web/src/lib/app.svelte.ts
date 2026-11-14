@@ -132,6 +132,8 @@ class App {
   results = $state.raw<NoteView[]>([])
   online = $state(navigator.onLine)
   pending = $state(0)
+  /** Sends still preparing and encrypting their files, before the note shows in the feed. */
+  preparing = $state(0)
   syncing = $state(false)
   /** Why the server stopped answering: an Access session or a device session ended. */
   needsLogin = $state<"access" | "pair" | null>(null)
@@ -390,6 +392,9 @@ class App {
       if (this.#session) kv.push(["session", this.#session])
       await this.#db.write([{ store: "kv", kv }])
     }
+    // Keep the first sync: closed or reloaded now, the app would otherwise start empty and
+    // download everything again.
+    await this.save()
     await this.#ready()
     return null
   }
@@ -739,6 +744,8 @@ class App {
       this.toast(`${big.name || "That file"} is too large (${MAX_FILE_MB} MB max).`, "error")
       return false
     }
+    let preparing = files.length > 0
+    if (preparing) this.preparing++
     try {
       const attachments: AttachmentRef[] = []
       for (const f of files) {
@@ -751,7 +758,13 @@ class App {
           }),
         )
       }
-      const note = await this.nb.addNote(to.id, text, { attachments })
+      // The note shows (pending) as addNote writes it; from there its spinner shows the upload.
+      const added = this.nb.addNote(to.id, text, { attachments })
+      if (preparing) {
+        this.preparing--
+        preparing = false
+      }
+      const note = await added
       this.#toNewest()
       if (this.route.view === "feed" && this.route.channel === ALL) this.#remember(to.id)
       if (to.lock !== "open" && !to.unlocked) this.toast("Added to the locked channel.")
@@ -762,6 +775,7 @@ class App {
       this.toast(describe(e), "error")
       return false
     } finally {
+      if (preparing) this.preparing--
       this.pending = await this.nb.pendingCount()
     }
   }

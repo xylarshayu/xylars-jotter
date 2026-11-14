@@ -437,6 +437,25 @@ describe("attachments", () => {
     expect(await nb.readAttachment(b.id, moved!.attachments[0]!)).toEqual(data)
   })
 
+  it("queues files with their note, which shows at once; a flush started meanwhile sends it too", async () => {
+    const { nb } = await notebook()
+    const ch = await nb.createChannel({ name: "Queued", lock: "open" })
+    const data = crypto.getRandomValues(new Uint8Array(60_000))
+    const ref = await nb.addAttachment(ch.id, data, "image/png", { name: "synthetic.png" })
+    // Not sent on its own: the note's write sends it, so the note isn't held up by the upload.
+    expect(await nb.pendingCount()).toBe(1)
+    const running = nb.flush()
+    const note = await nb.addNote(ch.id, "synthetic with a file", { attachments: [ref] })
+    await running
+    expect(await nb.pendingCount()).toBe(0)
+    const fresh = new Notebook({ api: api() })
+    await fresh.keys.setOpenKey(nb.keys.openIdentity)
+    await fresh.sync()
+    const [got] = await fresh.notes(ch.id)
+    expect(got!.id).toBe(note.id)
+    expect(await fresh.readAttachment(ch.id, got!.attachments[0]!)).toEqual(data)
+  })
+
   it("rejects non-age uploads", async () => {
     const { nb } = await notebook()
     const ch = await nb.createChannel({ name: "A", lock: "open" })

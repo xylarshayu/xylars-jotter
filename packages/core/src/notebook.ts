@@ -161,6 +161,8 @@ export class Notebook {
   #onChange: (() => void) | undefined
   #shrinkImage: ImageShrinker | undefined
   #flushing: Promise<FlushResult> | undefined
+  /** Set when a flush is asked for while one runs: it goes round again for the new writes. */
+  #flushAgain = false
 
   constructor(opts: NotebookOptions) {
     this.api = opts.api
@@ -711,7 +713,9 @@ export class Notebook {
     if (data.length > MAX_ATTACHMENT_PLAIN_BYTES) throw new ApiError(413, "attachment_too_large")
     const id = newId()
     const ct = await encryptTo(channel.recipient, data)
-    await this.#enqueue({ kind: "uploadAttachment", id, channelId, data: ct })
+    // Queued, not sent yet: the write of the note that refers to it sends it first. So a note
+    // shows (pending) as soon as it's written, not once every file has uploaded.
+    await this.#enqueue({ kind: "uploadAttachment", id, channelId, data: ct }, false)
     const ref: AttachmentRef = { id, mime, size: data.length }
     if (meta.name) ref.name = meta.name
     if (meta.width) ref.width = meta.width
@@ -813,15 +817,32 @@ export class Notebook {
   /** Outbox keys sort in write order, even for several writes in the same millisecond. */
   #lastKeyTime = 0
 
-  async #enqueue(op: OutboxOp): Promise<void> {
+  async #enqueue(op: OutboxOp, send = true): Promise<void> {
     const t = (this.#lastKeyTime = Math.max(Date.now(), this.#lastKeyTime + 1))
     await this.outbox.put({ key: `${t.toString().padStart(15, "0")}-${newId()}`, op })
-    await this.flush()
+    if (send) await this.flush()
   }
 
-  /** Sends pending writes in order. Stops at the first network failure; drops rejected ops. */
+  /**
+   * Sends pending writes in order. Stops at the first network failure; drops rejected ops.
+   * Asked while a flush runs, it waits for that one, which then also sends what came in meanwhile.
+   */
   flush(): Promise<FlushResult> {
-    this.#flushing ??= this.#flush().finally(() => (this.#flushing = undefined))
+    if (this.#flushing) {
+      this.#flushAgain = true
+      return this.#flushing
+    }
+    this.#flushing = (async () => {
+      const total: FlushResult = { sent: 0, pending: 0, rejected: [] }
+      do {
+        this.#flushAgain = false
+        const r = await this.#flush()
+        total.sent += r.sent
+        total.pending = r.pending
+        total.rejected.push(...r.rejected)
+      } while (this.#flushAgain && !total.pending)
+      return total
+    })().finally(() => (this.#flushing = undefined))
     return this.#flushing
   }
 

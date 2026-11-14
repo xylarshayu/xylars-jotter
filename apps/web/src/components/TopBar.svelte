@@ -57,7 +57,7 @@
             onclick={() => {
               app.setSearchAll(false)
               input?.focus()
-            }}>This channel</button
+            }}>This<span class="wide"> channel</span></button
           >
           <button
             aria-pressed={app.searchAll}
@@ -165,6 +165,8 @@
   }
   .search {
     flex: 1;
+    /* without this the input's default width pushes the bar, and the page, past the screen */
+    min-width: 0;
     display: flex;
     align-items: center;
     gap: 8px;

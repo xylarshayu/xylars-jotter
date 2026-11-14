@@ -175,9 +175,11 @@
       class="send"
       aria-label={app.editing ? "Save edit" : "Send note"}
       disabled={!app.editing && !canSend}
+      aria-busy={app.preparing > 0}
       onclick={submit}
     >
       <Icon name={app.editing ? "check" : "send"} />
+      {#if app.preparing}<span class="busy" aria-hidden="true"></span>{/if}
     </button>
   </div>
 </div>
@@ -314,6 +316,7 @@
     border-color: color-mix(in srgb, var(--accent) 60%, var(--line));
   }
   .send {
+    position: relative;
     width: var(--tap);
     height: var(--tap);
     flex: none;
@@ -325,6 +328,21 @@
     color: var(--accent-ink);
     cursor: pointer;
     transition: opacity 0.12s;
+  }
+  /* Files being prepared and encrypted, before their note shows. */
+  .busy {
+    position: absolute;
+    inset: -4px;
+    border-radius: 50%;
+    border: 2px solid transparent;
+    border-top-color: var(--accent);
+    animation: spin 0.8s linear infinite;
+    pointer-events: none;
+  }
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
   }
   .send:disabled {
     opacity: 0.35;
